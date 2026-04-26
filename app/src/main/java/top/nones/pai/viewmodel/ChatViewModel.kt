@@ -104,6 +104,9 @@ class ChatViewModel : ViewModel() {
         val chatId = currentChatId ?: return
         val trimmed = content.trim()
         if (trimmed.isEmpty() && attachments.isEmpty()) return
+        
+        // 处理附件，转换为 AI 可识别的格式
+        val processedContent = processAttachments(context, trimmed, attachments)
         val userMessage = Message(chatId = chatId, content = trimmed, role = "user", attachments = attachments)
 
         _messages.value = _messages.value + userMessage
@@ -122,7 +125,7 @@ class ChatViewModel : ViewModel() {
                     val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
                     try {
                         _aiStatus.value = "正在处理响应..."
-                        when (val aiResponse = aiApiService.sendMessage(modelConfig, buildRequestMessages(modelConfig, history))) {
+                        when (val aiResponse = aiApiService.sendMessage(modelConfig, buildRequestMessages(modelConfig, history, processedContent))) {
                             is ApiResult.Success -> {
                                 _aiStatus.value = "处理完成"
                                 val aiMessage = Message(
@@ -170,6 +173,39 @@ class ChatViewModel : ViewModel() {
                 _isLoading.value = false
             }
         }
+    }
+    
+    private fun processAttachments(context: Context, originalContent: String, attachments: List<Attachment>): String {
+        if (attachments.isEmpty()) return originalContent
+        
+        val processedContent = StringBuilder(originalContent)
+        processedContent.append("\n\n附件内容:\n")
+        
+        attachments.forEach { attachment ->
+            try {
+                val content = readAttachmentContent(context, attachment)
+                processedContent.append("\n=== ${attachment.name} (${attachment.type}) ===\n")
+                processedContent.append(content)
+                processedContent.append("\n")
+            } catch (e: Exception) {
+                processedContent.append("\n=== ${attachment.name} (${attachment.type}) ===\n")
+                processedContent.append("无法读取附件内容: ${e.message}")
+                processedContent.append("\n")
+            }
+        }
+        
+        return processedContent.toString()
+    }
+    
+    private fun readAttachmentContent(context: Context, attachment: Attachment): String {
+        val uri = android.net.Uri.parse(attachment.path)
+        val contentResolver = context.contentResolver
+        
+        return contentResolver.openInputStream(uri)?.use {inputStream ->
+            inputStream.bufferedReader().use { reader ->
+                reader.readText()
+            }
+        } ?: "无法打开附件"
     }
 
     fun createNewChat(
@@ -326,20 +362,40 @@ class ChatViewModel : ViewModel() {
 
     private fun buildRequestMessages(
         config: ModelConfig,
-        history: List<Message>
+        history: List<Message>,
+        processedContent: String? = null
     ): List<MessageRequest> {
         val result = mutableListOf<MessageRequest>()
         if (config.systemPrompt.isNotBlank()) {
             result += MessageRequest(role = "system", content = config.systemPrompt)
         }
-        result += history.map { message ->
-            var content = message.content
-            if (message.attachments.isNotEmpty()) {
-                val attachmentInfo = message.attachments.joinToString("\n") { "- ${it.name} (${it.type})" }
-                content = "$content\n\n附件:\n$attachmentInfo"
+        
+        // 如果有处理后的内容，只使用处理后的内容作为最后一条消息
+        if (processedContent != null && history.isNotEmpty()) {
+            // 添加历史消息（除了最后一条）
+            result += history.subList(0, history.size - 1).map { message ->
+                var content = message.content
+                if (message.attachments.isNotEmpty()) {
+                    val attachmentInfo = message.attachments.joinToString("\n") { "- ${it.name} (${it.type})" }
+                    content = "$content\n\n附件:\n$attachmentInfo"
+                }
+                MessageRequest(role = message.role, content = content)
             }
-            MessageRequest(role = message.role, content = content)
+            // 添加最后一条消息，使用处理后的内容
+            val lastMessage = history.last()
+            result += MessageRequest(role = lastMessage.role, content = processedContent)
+        } else {
+            // 没有处理后的内容，使用所有历史消息的原始内容
+            result += history.map { message ->
+                var content = message.content
+                if (message.attachments.isNotEmpty()) {
+                    val attachmentInfo = message.attachments.joinToString("\n") { "- ${it.name} (${it.type})" }
+                    content = "$content\n\n附件:\n$attachmentInfo"
+                }
+                MessageRequest(role = message.role, content = content)
+            }
         }
+        
         return result
     }
 
