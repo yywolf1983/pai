@@ -1,0 +1,41 @@
+# --- libs.versions.toml ---
+[versions]
+agp = "8.8.2"
+kotlin = "1.9.23"
+composeBom = "2024.06.00"
+activityCompose = "1.9.0"
+lifecycle = "2.8.0"
+
+[plugins]
+# Android Plugins
+android-application = { id = "com.android.application", version.ref = "agp" }
+
+# Kotlin Plugins
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
+
+[libraries]
+# Compose BOM (Manages Compose library versions)
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+
+# Core Libraries
+activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+# Compose UI Components
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+
+# --- Dependencies for the app module ---
+# Note: These are often placed in the app/build.gradle.kts file, 
+# but defining them in libs.versions.toml allows the app module to reference them cleanly.
+
+# Example reference in app/build.gradle.kts:
+# implementation(libs.compose.material3)
+# implementation(libs.activity.compose)
+# ...
