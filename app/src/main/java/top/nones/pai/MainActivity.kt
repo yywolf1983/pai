@@ -1,10 +1,16 @@
 package top.nones.pai
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.*
 import androidx.compose.foundation.layout.Box
@@ -17,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import top.nones.pai.data.model.Attachment
 import top.nones.pai.data.model.ModelConfig
 import top.nones.pai.ui.ChatListScreen
 import top.nones.pai.ui.ChatScreen
@@ -63,6 +70,66 @@ fun AppNavigation(
     // 编辑消息状态
     var editingMessage by remember {
         mutableStateOf<top.nones.pai.data.model.Message?>(null)
+    }
+    
+    // 选中的附件
+    var selectedAttachments by remember {
+        mutableStateOf<List<Attachment>>(emptyList())
+    }
+    
+    // 文件选择启动器
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val contentResolver = context.contentResolver
+                val mimeType = contentResolver.getType(it)
+                val fileName = contentResolver.query(it, null, null, null, null)?.use {cursor ->
+                    val nameIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                    if (cursor.moveToFirst() && nameIndex != -1) {
+                        cursor.getString(nameIndex)
+                    } else {
+                        "attachment"
+                    }
+                } ?: "attachment"
+                
+                val attachment = Attachment(
+                    name = fileName,
+                    path = it.toString(),
+                    type = mimeType ?: "application/octet-stream"
+                )
+                
+                // 将附件添加到选中列表
+                selectedAttachments = selectedAttachments + attachment
+                
+                // 显示选择成功的提示
+                Toast.makeText(context, "已选择附件: $fileName", Toast.LENGTH_SHORT).show()
+                
+                // 现在需要将附件传递给 ChatViewModel，以便在发送消息时包含附件
+                // 这里简化处理，直接在发送消息时添加附件
+                // 实际应用中可能需要更复杂的附件管理逻辑
+                
+            } catch (e: Exception) {
+                Toast.makeText(context, "选择附件失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    
+    // 权限请求启动器
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            // 权限已授予，启动文件选择器
+            try {
+                filePickerLauncher.launch("*")
+            } catch (e: Exception) {
+                Toast.makeText(context, "启动文件选择器失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "需要存储权限才能选择附件", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // 收集状态
@@ -134,6 +201,7 @@ fun AppNavigation(
                     isSending = isLoading,
                     chatTitle = chatTitle,
                     editingMessage = editingMessage,
+                    selectedAttachments = selectedAttachments,
                     onSendMessage = {
                         // 如果是编辑模式，先删除原消息，再发送新消息
                         val msgToEdit = editingMessage
@@ -141,7 +209,9 @@ fun AppNavigation(
                             viewModel.deleteMessage(context, msgToEdit)
                             editingMessage = null
                         }
-                        viewModel.sendMessage(context, it)
+                        viewModel.sendMessage(context, it, selectedAttachments)
+                        // 发送后清除选中的附件
+                        selectedAttachments = emptyList()
                     },
                     onDeleteMessage = {
                         viewModel.deleteMessage(context, it)
@@ -153,7 +223,7 @@ fun AppNavigation(
                         } else {
                             it.content
                         }
-                        viewModel.sendMessage(context, originalContent)
+                        viewModel.sendMessage(context, originalContent, it.attachments)
                     },
                     onEditMessage = {
                         editingMessage = it
@@ -165,9 +235,19 @@ fun AppNavigation(
                             viewModel.cancelAiRequest()
                         },
                         onSelectAttachments = {
-                            // 这里需要实现文件选择逻辑
-                            // 由于是演示，我们先显示一个简单的提示
-                            Toast.makeText(context, "附件选择功能待实现", Toast.LENGTH_SHORT).show()
+                            // 检查并请求存储权限
+                            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                android.Manifest.permission.READ_MEDIA_IMAGES
+                            } else {
+                                android.Manifest.permission.READ_EXTERNAL_STORAGE
+                            }
+                            permissionLauncher.launch(permission)
+                        },
+                        onRemoveAttachment = { index ->
+                            // 移除指定位置的附件
+                            val newAttachments = selectedAttachments.toMutableList()
+                            newAttachments.removeAt(index)
+                            selectedAttachments = newAttachments
                         },
                         onNewChat = {
                             // 自动创建新聊天，使用默认模型

@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.clickable
 import top.nones.pai.data.model.Message
+import top.nones.pai.data.model.Attachment
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,8 +70,10 @@ fun ChatScreen(
     isSending: Boolean,
     chatTitle: String,
     editingMessage: Message?,
+    selectedAttachments: List<Attachment>,
     onSendMessage: (String) -> Unit,
     onSelectAttachments: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     onResendMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
@@ -215,6 +218,74 @@ fun ChatScreen(
                     }
                 }
 
+                // 选中的附件显示
+                if (selectedAttachments.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        tonalElevation = 2.dp,
+                        shadowElevation = 2.dp
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp)
+                        ) {
+                            Text(
+                                text = "已选择附件:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            selectedAttachments.forEachIndexed { index, attachment ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Add,
+                                        contentDescription = "附件",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = attachment.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = attachment.type,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    )
+                                    IconButton(
+                                        onClick = { 
+                                            // 移除附件
+                                            onRemoveAttachment(index)
+                                        },
+                                        colors = IconButtonDefaults.iconButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        ),
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "移除附件",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 // 输入区域
                 Surface(
                     modifier = Modifier
@@ -280,7 +351,7 @@ fun ChatScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         val buttonColor by animateColorAsState(
-                            targetValue = if (isSending || messageText.trim().isEmpty()) {
+                            targetValue = if (isSending || (messageText.trim().isEmpty() && selectedAttachments.isEmpty())) {
                                 MaterialTheme.colorScheme.surfaceVariant
                             } else {
                                 MaterialTheme.colorScheme.primary
@@ -294,13 +365,13 @@ fun ChatScreen(
                                     onCancelAiRequest()
                                 } else {
                                     val trimmed = messageText.trim()
-                                    if (trimmed.isNotEmpty()) {
+                                    if (trimmed.isNotEmpty() || selectedAttachments.isNotEmpty()) {
                                         onSendMessage(trimmed)
                                         messageText = ""
                                     }
                                 }
                             },
-                            enabled = !isSending || messageText.trim().isNotEmpty() || isSending,
+                            enabled = !isSending || (messageText.trim().isNotEmpty() || selectedAttachments.isNotEmpty()) || isSending,
                             shape = RoundedCornerShape(50),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isSending) {
