@@ -13,6 +13,9 @@ import top.nones.pai.data.model.ChatSession
 import top.nones.pai.data.model.Message
 import top.nones.pai.data.model.ModelConfig
 import top.nones.pai.data.model.Attachment
+import top.nones.pai.utils.FileUtils
+import top.nones.pai.utils.FileOperationParser
+import top.nones.pai.utils.SecurityManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +65,8 @@ class ChatViewModel : ViewModel() {
     fun bootstrap(context: Context) {
         viewModelScope.launch {
             try {
+                // 初始化安全管理器
+                SecurityManager.initialize(context)
                 loadFromSharedPreferences(context)
                 if (localConfigs.isEmpty()) {
                     localConfigs += ModelConfig(
@@ -83,7 +88,7 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun loadChatSessions(context: Context) {
+    fun loadChatSessions() {
         _chatSessions.value = localChats.sortedByDescending { it.updatedAtMillis }
     }
 
@@ -91,12 +96,12 @@ class ChatViewModel : ViewModel() {
         _errorMessage.value = null
     }
 
-    fun loadMessages(context: Context, chatId: Long) {
+    fun loadMessages(chatId: Long) {
         currentChatId = chatId
         _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
     }
 
-    fun loadModelConfigs(context: Context) {
+    fun loadModelConfigs() {
         _modelConfigs.value = localConfigs.sortedWith(compareByDescending<ModelConfig> { it.isDefault }.thenBy { it.name })
     }
 
@@ -111,66 +116,207 @@ class ChatViewModel : ViewModel() {
 
         _messages.value = _messages.value + userMessage
 
-        viewModelScope.launch {
-            try {
-                localMessages += userMessage.copy(id = nextMessageId())
+        // 检查是否为文件操作指令
+        val parser = FileOperationParser()
+        val operation = parser.parseCommand(trimmed)
+        
+        if (operation.type != FileOperationParser.OperationType.UNKNOWN) {
+            // 处理文件操作
+            handleFileOperation(context, chatId, operation)
+        } else {
+            // 正常的AI聊天
+            viewModelScope.launch {
+                try {
+                    localMessages += userMessage.copy(id = nextMessageId())
 
-                val chatSession = localChats.firstOrNull { it.id == chatId }
-                val modelConfig = localConfigs.firstOrNull { it.id == chatSession?.modelId }
-                    ?: localConfigs.firstOrNull { it.isDefault }
+                    val chatSession = localChats.firstOrNull { it.id == chatId }
+                    val modelConfig = localConfigs.firstOrNull { it.id == chatSession?.modelId }
+                        ?: localConfigs.firstOrNull { it.isDefault }
 
-                if (modelConfig != null) {
-                    _isLoading.value = true
-                    _aiStatus.value = "正在发送请求..."
-                    val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
-                    try {
-                        _aiStatus.value = "正在处理响应..."
-                        when (val aiResponse = aiApiService.sendMessage(modelConfig, buildRequestMessages(modelConfig, history, processedContent))) {
-                            is ApiResult.Success -> {
-                                _aiStatus.value = "处理完成"
-                                val aiMessage = Message(
-                                    id = nextMessageId(),
-                                    chatId = chatId,
-                                    content = aiResponse.data,
-                                    role = "assistant"
-                                )
-
-                                localMessages += aiMessage
-                                saveToSharedPreferences(context)
-                                _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
-
-                                val index = localChats.indexOfFirst { it.id == chatId }
-                                if (index >= 0) {
-                                    localChats[index] = localChats[index].copy(
-                                        updatedAtMillis = System.currentTimeMillis(),
-                                        title = localChats[index].title.ifBlank { trimmed.take(20) }
+                    if (modelConfig != null) {
+                        _isLoading.value = true
+                        _aiStatus.value = "正在发送请求..."
+                        val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                        try {
+                            _aiStatus.value = "正在处理响应..."
+                            when (val aiResponse = aiApiService.sendMessage(modelConfig, buildRequestMessages(modelConfig, history, processedContent))) {
+                                is ApiResult.Success -> {
+                                    _aiStatus.value = "处理完成"
+                                    val aiMessage = Message(
+                                        id = nextMessageId(),
+                                        chatId = chatId,
+                                        content = aiResponse.data,
+                                        role = "assistant"
                                     )
+
+                                    localMessages += aiMessage
                                     saveToSharedPreferences(context)
-                                    loadChatSessions(context)
+                                    _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+
+                                    val index = localChats.indexOfFirst { it.id == chatId }
+                                    if (index >= 0) {
+                                        localChats[index] = localChats[index].copy(
+                                            updatedAtMillis = System.currentTimeMillis(),
+                                            title = if (localChats[index].title.isBlank() || localChats[index].title == "新聊天") trimmed.take(20) else localChats[index].title
+                                        )
+                                        saveToSharedPreferences(context)
+                                        loadChatSessions()
+                                    }
+                                }
+                                is ApiResult.Error -> {
+                                    _aiStatus.value = "处理失败"
+                                    _errorMessage.value = "AI 聊天失败: ${aiResponse.message}"
                                 }
                             }
-                            is ApiResult.Error -> {
-                                _aiStatus.value = "处理失败"
-                                _errorMessage.value = "AI 聊天失败: ${aiResponse.message}"
+                        } catch (e: Exception) {
+                            _aiStatus.value = "处理异常"
+                            _errorMessage.value = "发送消息失败: ${e.message}"
+                        } finally {
+                            // 延迟清除状态，让用户有时间看到
+                            viewModelScope.launch {
+                                kotlinx.coroutines.delay(2000)
+                                _aiStatus.value = null
                             }
                         }
-                    } catch (e: Exception) {
-                        _aiStatus.value = "处理异常"
-                        _errorMessage.value = "发送消息失败: ${e.message}"
-                    } finally {
-                        // 延迟清除状态，让用户有时间看到
-                        viewModelScope.launch {
-                            kotlinx.coroutines.delay(2000)
-                            _aiStatus.value = null
+                    } else {
+                        _errorMessage.value = "未找到模型配置"
+                    }
+                } catch (e: Exception) {
+                    _errorMessage.value = "发送消息失败: ${e.message}"
+                } finally {
+                    _isLoading.value = false
+                }
+            }
+        }
+    }
+
+    private fun handleFileOperation(context: Context, chatId: Long, operation: FileOperationParser.FileOperation) {
+        viewModelScope.launch {
+            try {
+                // 检查操作安全性
+                if (!SecurityManager.checkOperationSafety(context, operation)) {
+                    _isLoading.value = true
+                    _aiStatus.value = "操作失败"
+                    val aiMessage = Message(
+                        id = nextMessageId(),
+                        chatId = chatId,
+                        content = "安全检查失败：操作路径不在安全目录内",
+                        role = "assistant"
+                    )
+                    localMessages += aiMessage
+                    saveToSharedPreferences(context)
+                    _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                    _isLoading.value = false
+                    viewModelScope.launch {
+                        kotlinx.coroutines.delay(2000)
+                        _aiStatus.value = null
+                    }
+                    return@launch
+                }
+                
+                _isLoading.value = true
+                _aiStatus.value = "正在执行文件操作..."
+                
+                val result = when (operation.type) {
+                    FileOperationParser.OperationType.READ -> {
+                        try {
+                            val content = FileUtils.readFile(context, operation.filePath)
+                            "文件内容:\n$content"
+                        } catch (e: Exception) {
+                            "读取文件失败: ${e.message}"
                         }
                     }
-                } else {
-                    _errorMessage.value = "未找到模型配置"
+                    FileOperationParser.OperationType.WRITE -> {
+                        val success = FileUtils.writeFile(context, operation.filePath, operation.content)
+                        if (success) "文件写入成功" else "文件写入失败"
+                    }
+                    FileOperationParser.OperationType.CREATE -> {
+                        val success = FileUtils.createFile(context, operation.filePath)
+                        if (success) "文件创建成功" else "文件创建失败"
+                    }
+                    FileOperationParser.OperationType.DELETE -> {
+                        val success = FileUtils.deleteFile(context, operation.filePath)
+                        if (success) "文件删除成功" else "文件删除失败"
+                    }
+                    FileOperationParser.OperationType.LIST -> {
+                        val files = FileUtils.listFiles(context, operation.filePath)
+                        if (files.isEmpty()) "目录为空" else "目录文件:\n${files.joinToString("\n")}"
+                    }
+                    FileOperationParser.OperationType.EXIST -> {
+                        val exists = FileUtils.fileExists(context, operation.filePath)
+                        if (exists) "文件存在" else "文件不存在"
+                    }
+                    FileOperationParser.OperationType.SIZE -> {
+                        val size = FileUtils.getFileSize(context, operation.filePath)
+                        "文件大小: $size 字节"
+                    }
+                    FileOperationParser.OperationType.RENAME -> {
+                        val success = FileUtils.renameFile(context, operation.filePath, operation.content)
+                        if (success) "文件重命名成功" else "文件重命名失败"
+                    }
+                    FileOperationParser.OperationType.MOVE -> {
+                        val success = FileUtils.moveFile(context, operation.filePath, operation.content)
+                        if (success) "文件移动成功" else "文件移动失败"
+                    }
+                    FileOperationParser.OperationType.COPY -> {
+                        val success = FileUtils.copyFile(context, operation.filePath, operation.content)
+                        if (success) "文件复制成功" else "文件复制失败"
+                    }
+                    FileOperationParser.OperationType.BATCH_DELETE -> {
+                        val count = FileUtils.batchDeleteFiles(context, operation.filePath)
+                        "批量删除完成，共删除 $count 个文件"
+                    }
+                    FileOperationParser.OperationType.BATCH_RENAME -> {
+                        val prefix = operation.options.getOrDefault("prefix", "")
+                        val count = FileUtils.batchRenameFiles(context, operation.filePath, prefix)
+                        "批量重命名完成，共重命名 $count 个文件"
+                    }
+                    FileOperationParser.OperationType.BATCH_MOVE -> {
+                        val count = FileUtils.batchMoveFiles(context, operation.filePath, operation.content)
+                        "批量移动完成，共移动 $count 个文件"
+                    }
+                    FileOperationParser.OperationType.SMART_SORT -> {
+                        val sortBy = operation.options.getOrDefault("sort_by", "type")
+                        val target = operation.options.getOrDefault("target", operation.filePath)
+                        val count = FileUtils.smartSortFiles(context, operation.filePath, sortBy, target)
+                        "智能整理完成，共整理 $count 个文件"
+                    }
+                    else -> "未知操作"
+                }
+                
+                _aiStatus.value = "操作完成"
+                
+                // 添加操作结果消息
+                val aiMessage = Message(
+                    id = nextMessageId(),
+                    chatId = chatId,
+                    content = result,
+                    role = "assistant"
+                )
+                
+                localMessages += aiMessage
+                saveToSharedPreferences(context)
+                _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                
+                // 更新聊天会话
+                val index = localChats.indexOfFirst { it.id == chatId }
+                if (index >= 0) {
+                    localChats[index] = localChats[index].copy(
+                        updatedAtMillis = System.currentTimeMillis()
+                    )
+                    saveToSharedPreferences(context)
+                    loadChatSessions()
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "发送消息失败: ${e.message}"
+                _aiStatus.value = "操作失败"
+                _errorMessage.value = "文件操作失败: ${e.message}"
             } finally {
                 _isLoading.value = false
+                // 延迟清除状态，让用户有时间看到
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(2000)
+                    _aiStatus.value = null
+                }
             }
         }
     }
@@ -226,7 +372,7 @@ class ChatViewModel : ViewModel() {
                 val chatId = chatSession.id
                 currentChatId = chatId
                 _messages.value = emptyList()
-                loadChatSessions(context)
+                loadChatSessions()
                 onCreated(chatId)
             } catch (e: Exception) {
                 _errorMessage.value = "创建聊天会话失败: ${e.message}"
@@ -238,7 +384,7 @@ class ChatViewModel : ViewModel() {
         localMessages.removeAll { it.chatId == chatSession.id }
         localChats.removeAll { it.id == chatSession.id }
         saveToSharedPreferences(context)
-        loadChatSessions(context)
+        loadChatSessions()
         if (currentChatId == chatSession.id) {
             currentChatId = null
             _messages.value = emptyList()
@@ -250,7 +396,7 @@ class ChatViewModel : ViewModel() {
         if (index >= 0) {
             localChats[index] = localChats[index].copy(title = newTitle)
             saveToSharedPreferences(context)
-            loadChatSessions(context)
+            loadChatSessions()
         }
     }
 
@@ -266,7 +412,7 @@ class ChatViewModel : ViewModel() {
                 if (index >= 0) localConfigs[index] = modelConfig
             }
             saveToSharedPreferences(context)
-            loadModelConfigs(context)
+            loadModelConfigs()
         } catch (e: Exception) {
             _errorMessage.value = "创建模型配置失败: ${e.message}"
         }
@@ -276,7 +422,7 @@ class ChatViewModel : ViewModel() {
         try {
             localConfigs.replaceAll { it.copy(isDefault = it.id == modelConfig.id) }
             saveToSharedPreferences(context)
-            loadModelConfigs(context)
+            loadModelConfigs()
         } catch (e: Exception) {
             _errorMessage.value = "设置默认模型失败: ${e.message}"
         }
@@ -289,7 +435,7 @@ class ChatViewModel : ViewModel() {
                 localConfigs[0] = localConfigs[0].copy(isDefault = true)
             }
             saveToSharedPreferences(context)
-            loadModelConfigs(context)
+            loadModelConfigs()
         } catch (e: Exception) {
             _errorMessage.value = "删除模型配置失败: ${e.message}"
         }
@@ -300,7 +446,7 @@ class ChatViewModel : ViewModel() {
             localMessages.removeAll { it.id == message.id }
             saveToSharedPreferences(context)
             if (currentChatId != null) {
-                loadMessages(context, currentChatId!!)
+                loadMessages(currentChatId!!)
             }
         } catch (e: Exception) {
             _errorMessage.value = "删除消息失败: ${e.message}"

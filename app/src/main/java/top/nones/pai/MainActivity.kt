@@ -149,7 +149,7 @@ fun AppNavigation(
             // 如果有聊天会话，默认显示第一个
             val firstChat = chatSessions.first()
             if (currentScreen !is Screen.Chat) {
-                viewModel.loadMessages(context, firstChat.id)
+                viewModel.loadMessages(firstChat.id)
                 currentScreen = Screen.Chat(firstChat.id)
             }
         } else if (modelConfigs.isNotEmpty()) {
@@ -157,7 +157,7 @@ fun AppNavigation(
             val defaultModel = modelConfigs.firstOrNull { it.isDefault } ?: modelConfigs.firstOrNull()
             if (defaultModel != null) {
                 viewModel.createNewChat(context, defaultModel.id) { chatId ->
-                    viewModel.loadMessages(context, chatId)
+                    viewModel.loadMessages(chatId)
                     currentScreen = Screen.Chat(chatId)
                 }
             }
@@ -179,7 +179,7 @@ fun AppNavigation(
                 ChatListScreen(
                     chatSessions = chatSessions,
                     onChatSessionClick = { chatSession ->
-                        viewModel.loadMessages(context, chatSession.id)
+                        viewModel.loadMessages(chatSession.id)
                         currentScreen = Screen.Chat(chatSession.id)
                     },
                     onDeleteChatClick = { chatSession ->
@@ -255,7 +255,7 @@ fun AppNavigation(
                             val defaultModel = modelConfigs.firstOrNull { it.isDefault } ?: modelConfigs.firstOrNull()
                             if (defaultModel != null) {
                                 viewModel.createNewChat(context, defaultModel.id) { newChatId ->
-                                    viewModel.loadMessages(context, newChatId)
+                                    viewModel.loadMessages(newChatId)
                                     currentScreen = Screen.Chat(newChatId)
                                 }
                             }
@@ -317,7 +317,7 @@ fun AppNavigation(
                         viewModel.clearModelTestStatus()
                         viewModel.clearAvailableModels()
                         // 重新加载模型配置
-                        viewModel.loadModelConfigs(context)
+                        viewModel.loadModelConfigs()
                         currentScreen = Screen.ModelConfigList
                     },
                     onCancel = {
