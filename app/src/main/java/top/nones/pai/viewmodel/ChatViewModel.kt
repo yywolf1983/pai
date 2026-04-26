@@ -80,6 +80,10 @@ class ChatViewModel : ViewModel() {
                         isDefault = true
                     )
                     saveToSharedPreferences(context)
+                } else if (localConfigs.none { it.isDefault }) {
+                    // 如果有模型配置但没有默认模型，设置第一个为默认
+                    localConfigs[0] = localConfigs[0].copy(isDefault = true)
+                    saveToSharedPreferences(context)
                 }
                 publishAll()
             } catch (e: Exception) {
@@ -566,6 +570,10 @@ class ChatViewModel : ViewModel() {
             localConfigs.addAll(loadedConfigs)
             if (localConfigs.isNotEmpty()) {
                 configIdSeed = localConfigs.maxByOrNull { it.id }?.id ?: 0
+                // 确保有一个默认模型
+                if (localConfigs.none { it.isDefault }) {
+                    localConfigs[0] = localConfigs[0].copy(isDefault = true)
+                }
             }
         }
         
