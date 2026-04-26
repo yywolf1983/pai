@@ -79,7 +79,7 @@ fun AppNavigation(
     
     // 文件选择启动器
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             try {
@@ -123,7 +123,8 @@ fun AppNavigation(
         if (isGranted) {
             // 权限已授予，启动文件选择器
             try {
-                filePickerLauncher.launch("*")
+                // 启动文件选择器，支持所有文件类型
+                filePickerLauncher.launch(arrayOf("*/*"))
             } catch (e: Exception) {
                 Toast.makeText(context, "启动文件选择器失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
