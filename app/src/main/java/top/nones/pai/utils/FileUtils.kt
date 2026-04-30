@@ -19,9 +19,46 @@ object FileUtils {
     fun writeFile(context: Context, filePath: String, content: String): Boolean {
         val file = getFile(context, filePath)
         try {
-            // 确保父目录存在
             file.parentFile?.mkdirs()
             file.writeText(content)
+            return true
+        } catch (e: SecurityException) {
+            return tryWriteToAppDir(context, filePath, content)
+        } catch (e: Exception) {
+            println("File write failed: ${e.message}, path: ${file.absolutePath}")
+            return false
+        }
+    }
+
+    fun appendToFile(context: Context, filePath: String, content: String): Boolean {
+        val file = getFile(context, filePath)
+        try {
+            file.parentFile?.mkdirs()
+            file.appendText(content)
+            return true
+        } catch (e: SecurityException) {
+            return tryAppendToAppDir(context, filePath, content)
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    private fun tryWriteToAppDir(context: Context, filePath: String, content: String): Boolean {
+        val fileName = File(filePath).name
+        val appFile = File(context.filesDir, fileName)
+        try {
+            appFile.writeText(content)
+            return true
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    private fun tryAppendToAppDir(context: Context, filePath: String, content: String): Boolean {
+        val fileName = File(filePath).name
+        val appFile = File(context.filesDir, fileName)
+        try {
+            appFile.appendText(content)
             return true
         } catch (e: Exception) {
             return false
@@ -45,7 +82,13 @@ object FileUtils {
     }
 
     fun listFiles(context: Context, directoryPath: String): List<String> {
-        val directory = getFile(context, directoryPath)
+        val pathToUse = if (directoryPath.isEmpty()) {
+            val bindingManager = DirectoryBindingManager(context)
+            bindingManager.getBoundDirectory() ?: "."
+        } else {
+            directoryPath
+        }
+        val directory = getFile(context, pathToUse)
         if (!directory.exists() || !directory.isDirectory) {
             return emptyList()
         }
@@ -226,13 +269,28 @@ object FileUtils {
         }
     }
 
-    fun getFile(context: Context, filePath: String): File {
-        // 如果是绝对路径，直接使用
+    fun getFile(context: Context, filePath: String, useBoundDir: Boolean = true): File {
+        val bindingManager = DirectoryBindingManager(context)
+        val boundDir = bindingManager.getBoundDirectory()
+        
+        if (useBoundDir && boundDir != null) {
+            // 提取文件名（去掉路径部分）
+            val fileName = if (filePath.startsWith("/")) {
+                File(filePath).name
+            } else {
+                filePath
+            }
+            return File(boundDir, fileName)
+        }
+
         if (filePath.startsWith("/")) {
             return File(filePath)
         }
-        // 否则使用应用的内部存储目录
-        return File(context.filesDir, filePath)
+        return File("/storage/emulated/0/Documents", filePath)
+    }
+
+    fun getFileWithBoundDir(context: Context, filePath: String): File {
+        return getFile(context, filePath, true)
     }
 
     fun getAppFilesDir(context: Context): String {

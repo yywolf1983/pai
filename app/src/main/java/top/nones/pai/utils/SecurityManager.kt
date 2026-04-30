@@ -1,6 +1,7 @@
 package top.nones.pai.utils
 
 import android.content.Context
+import android.os.Environment
 import java.io.File
 
 object SecurityManager {
@@ -13,16 +14,60 @@ object SecurityManager {
         "/sys"
     )
 
+    private val allowedPublicDirectories = setOf(
+        "/storage/emulated/0/Documents"
+    )
+
     fun initialize(context: Context) {
-        // 初始化安全目录，只允许访问应用内部存储和指定的安全目录
         safeDirectories.add(context.filesDir.absolutePath)
         safeDirectories.add(context.cacheDir.absolutePath)
-        // 可以添加其他安全目录
+        Environment.getExternalStorageDirectory()?.let {
+            safeDirectories.add(it.absolutePath)
+        }
+    }
+
+    fun isValidPath(path: String): Boolean {
+        val absolutePath = File(path).absolutePath
+
+        for (restrictedDir in restrictedDirectories) {
+            if (absolutePath.startsWith(restrictedDir)) {
+                return false
+            }
+        }
+
+        for (allowedDir in allowedPublicDirectories) {
+            if (absolutePath.startsWith(allowedDir)) {
+                return true
+            }
+        }
+
+        for (safeDir in safeDirectories) {
+            if (absolutePath.startsWith(safeDir)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    fun preventPathTraversal(baseDir: String, targetPath: String): String {
+        val resolved = File(baseDir, targetPath).canonicalPath
+        if (!resolved.startsWith(baseDir)) {
+            throw SecurityException("Illegal path traversal detected")
+        }
+        return resolved
     }
 
     fun isSafePath(context: Context, path: String): Boolean {
         val file = FileUtils.getFile(context, path)
         val absolutePath = file.absolutePath
+
+        // 检查是否在受限目录内
+        for (restrictedDir in restrictedDirectories) {
+            if (absolutePath.startsWith(restrictedDir)) {
+                return false
+            }
+        }
 
         // 检查是否在安全目录内
         for (safeDir in safeDirectories) {
@@ -31,10 +76,10 @@ object SecurityManager {
             }
         }
 
-        // 检查是否在受限目录内
-        for (restrictedDir in restrictedDirectories) {
-            if (absolutePath.startsWith(restrictedDir)) {
-                return false
+        // 检查是否在允许的公共目录内
+        for (allowedDir in allowedPublicDirectories) {
+            if (absolutePath.startsWith(allowedDir)) {
+                return true
             }
         }
 
@@ -55,33 +100,22 @@ object SecurityManager {
     }
 
     fun checkOperationSafety(context: Context, operation: FileOperationParser.FileOperation): Boolean {
-        // 检查路径安全性
-        if (!isSafePath(context, operation.filePath)) {
-            return false
-        }
-
-        // 对于移动和复制操作，还需要检查目标路径
-        if (operation.type in setOf(
-                FileOperationParser.OperationType.MOVE,
-                FileOperationParser.OperationType.COPY,
-                FileOperationParser.OperationType.BATCH_MOVE
-            )) {
-            if (!isSafePath(context, operation.content)) {
-                return false
+        val bindingManager = DirectoryBindingManager(context)
+        val boundDir = bindingManager.getBoundDirectory()
+        
+        if (boundDir != null) {
+            val file = FileUtils.getFile(context, operation.filePath, useBoundDir = true)
+            val absolutePath = file.absolutePath
+            
+            for (restrictedDir in restrictedDirectories) {
+                if (absolutePath.startsWith(restrictedDir)) {
+                    return false
+                }
             }
+            
+            return true
         }
-
-        // 对于批量操作，检查目录安全性
-        if (operation.type in setOf(
-                FileOperationParser.OperationType.BATCH_DELETE,
-                FileOperationParser.OperationType.BATCH_RENAME,
-                FileOperationParser.OperationType.SMART_SORT
-            )) {
-            if (!isSafePath(context, operation.filePath)) {
-                return false
-            }
-        }
-
+        
         return true
     }
 }
