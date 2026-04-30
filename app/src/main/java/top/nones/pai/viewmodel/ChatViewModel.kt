@@ -333,60 +333,58 @@ class ChatViewModel : ViewModel() {
                         "安全检查失败：操作路径不在安全目录内\n\n提示：请先使用 \"绑定目录到 /path/to/dir\" 设置工作目录"
                     } else {
                         _aiStatus.value = "正在执行文件操作..."
-                        val boundDir = DirectoryBindingManager(context).getBoundDirectory() ?: context.filesDir.absolutePath
-                        val fullPath = if (operation.filePath.startsWith("/")) operation.filePath else "$boundDir/${operation.filePath}"
+                        val fileName = if (operation.filePath.startsWith("/")) java.io.File(operation.filePath).name else operation.filePath
                         
                         when (operation.type) {
                             FileOperationParser.OperationType.READ -> {
                                 try {
                                     val content = FileUtils.readFile(context, operation.filePath)
-                                    "已读取文件: $fullPath\n\n文件内容:\n$content"
+                                    "已读取文件: $fileName\n\n文件内容:\n$content"
                                 } catch (e: Exception) {
-                                    "读取文件失败: $fullPath\n错误: ${e.message}"
+                                    "读取文件失败: $fileName\n错误: ${e.message}"
                                 }
                             }
                             FileOperationParser.OperationType.WRITE -> {
                                 val success = FileUtils.writeFile(context, operation.filePath, operation.content)
-                                if (success) "文件写入成功: $fullPath" else "文件写入失败: $fullPath"
+                                if (success) "文件写入成功: $fileName" else "文件写入失败: $fileName"
                             }
                             FileOperationParser.OperationType.APPEND -> {
                                 val success = FileUtils.appendToFile(context, operation.filePath, operation.content)
-                                if (success) "内容追加成功: $fullPath" else "追加失败: $fullPath"
+                                if (success) "内容追加成功: $fileName" else "追加失败: $fileName"
                             }
                             FileOperationParser.OperationType.CREATE -> {
                                 val success = FileUtils.createFile(context, operation.filePath)
-                                if (success) "文件创建成功: $fullPath" else "文件创建失败: $fullPath"
+                                if (success) "文件创建成功: $fileName" else "文件创建失败: $fileName"
                             }
                             FileOperationParser.OperationType.DELETE -> {
                                 val success = FileUtils.deleteFile(context, operation.filePath)
-                                if (success) "文件删除成功: $fullPath" else "文件删除失败: $fullPath"
+                                if (success) "文件删除成功: $fileName" else "文件删除失败: $fileName"
                             }
                             FileOperationParser.OperationType.LIST -> {
                                 val files = FileUtils.listFiles(context, operation.filePath)
-                                val dirPath = if (operation.filePath.isEmpty()) boundDir else "$boundDir/${operation.filePath}"
-                                if (files.isEmpty()) "目录为空: $dirPath" else "目录内容 ($dirPath):\n${files.joinToString("\n")}"
+                                if (files.isEmpty()) "目录为空" else "目录内容:\n${files.joinToString("\n")}"
                             }
                             FileOperationParser.OperationType.EXIST -> {
                                 val exists = FileUtils.fileExists(context, operation.filePath)
-                                if (exists) "文件存在: $fullPath" else "文件不存在: $fullPath"
+                                if (exists) "文件存在: $fileName" else "文件不存在: $fileName"
                             }
                             FileOperationParser.OperationType.SIZE -> {
                                 val size = FileUtils.getFileSize(context, operation.filePath)
-                                "文件大小: $fullPath\n大小: $size 字节"
+                                "文件大小: $fileName\n大小: $size 字节"
                             }
                             FileOperationParser.OperationType.RENAME -> {
                                 val success = FileUtils.renameFile(context, operation.filePath, operation.content)
-                                if (success) "文件重命名成功: $fullPath -> ${operation.content}" else "文件重命名失败: $fullPath"
+                                if (success) "文件重命名成功: $fileName -> ${operation.content}" else "文件重命名失败: $fileName"
                             }
                             FileOperationParser.OperationType.MOVE -> {
-                                val targetPath = if (operation.content.startsWith("/")) operation.content else "$boundDir/${operation.content}"
+                                val targetName = if (operation.content.startsWith("/")) java.io.File(operation.content).name else operation.content
                                 val success = FileUtils.moveFile(context, operation.filePath, operation.content)
-                                if (success) "文件移动成功: $fullPath -> $targetPath" else "文件移动失败: $fullPath"
+                                if (success) "文件移动成功: $fileName -> $targetName" else "文件移动失败: $fileName"
                             }
                             FileOperationParser.OperationType.COPY -> {
-                                val targetPath = if (operation.content.startsWith("/")) operation.content else "$boundDir/${operation.content}"
+                                val targetName = if (operation.content.startsWith("/")) java.io.File(operation.content).name else operation.content
                                 val success = FileUtils.copyFile(context, operation.filePath, operation.content)
-                                if (success) "文件复制成功: $fullPath -> $targetPath" else "文件复制失败: $fullPath"
+                                if (success) "文件复制成功: $fileName -> $targetName" else "文件复制失败: $fileName"
                             }
                             FileOperationParser.OperationType.BATCH_DELETE -> {
                                 val count = FileUtils.batchDeleteFiles(context, operation.filePath)
