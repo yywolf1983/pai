@@ -143,22 +143,22 @@ fun AppNavigation(
         viewModel.bootstrap(context)
     }
 
-    // 当聊天会话或模型配置变化时，检查是否需要自动创建聊天
+    // 当聊天会话或模型配置变化时，检查是否需要自动创建聊天（仅在聊天列表界面时触发）
     LaunchedEffect(chatSessions, modelConfigs) {
-        if (chatSessions.isNotEmpty()) {
-            // 如果有聊天会话，默认显示第一个
-            val firstChat = chatSessions.first()
-            if (currentScreen !is Screen.Chat) {
+        if (currentScreen is Screen.ChatList) {
+            if (chatSessions.isNotEmpty()) {
+                // 如果有聊天会话，默认显示第一个
+                val firstChat = chatSessions.first()
                 viewModel.loadMessages(firstChat.id)
                 currentScreen = Screen.Chat(firstChat.id)
-            }
-        } else if (modelConfigs.isNotEmpty()) {
-            // 如果没有聊天会话但有模型配置，自动创建一个
-            val defaultModel = modelConfigs.firstOrNull { it.isDefault } ?: modelConfigs.firstOrNull()
-            if (defaultModel != null) {
-                viewModel.createNewChat(context, defaultModel.id) { chatId ->
-                    viewModel.loadMessages(chatId)
-                    currentScreen = Screen.Chat(chatId)
+            } else if (modelConfigs.isNotEmpty()) {
+                // 如果没有聊天会话但有模型配置，自动创建一个
+                val defaultModel = modelConfigs.firstOrNull { it.isDefault } ?: modelConfigs.firstOrNull()
+                if (defaultModel != null) {
+                    viewModel.createNewChat(context, defaultModel.id) { chatId ->
+                        viewModel.loadMessages(chatId)
+                        currentScreen = Screen.Chat(chatId)
+                    }
                 }
             }
         }
