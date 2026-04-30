@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import top.nones.pai.data.api.AiApiService
 import top.nones.pai.data.api.ApiResult
+import top.nones.pai.data.api.AttachmentRequest
 import top.nones.pai.data.api.MessageRequest
 import top.nones.pai.data.model.Attachment
 import top.nones.pai.data.model.ChatSession
@@ -140,8 +141,8 @@ class ChatViewModel : ViewModel() {
         val chatId = currentChatId ?: return
         val trimmed = content.trim()
         if (trimmed.isEmpty() && attachments.isEmpty()) return
-        
-        val processedContent = processAttachments(context, trimmed, attachments)
+
+        val attachmentRequests = processAttachments(context, attachments)
         val userMessage = Message(chatId = chatId, content = trimmed, role = "user", attachments = attachments)
 
         _messages.value = _messages.value + userMessage
@@ -162,10 +163,10 @@ class ChatViewModel : ViewModel() {
                     _thinkingContent.value = null
                     _outputSpeed.value = 0.0
                     _outputSize.value = 0
-                    
+
                     val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
                     val toolDesc = FileOperationParser().getToolDescription()
-                    val requestMessages = buildRequestMessagesWithTools(modelConfig, history, processedContent, toolDesc)
+                    val requestMessages = buildRequestMessagesWithTools(modelConfig, history, trimmed, toolDesc, attachmentRequests)
                     
                     val contextSize = requestMessages.sumOf { it.content.length }
                     _contextSize.value = contextSize
@@ -426,24 +427,59 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    private fun processAttachments(context: Context, originalContent: String, attachments: List<Attachment>): String {
-        if (attachments.isEmpty()) return originalContent
-        
-        val processedContent = StringBuilder(originalContent)
-        processedContent.append("\n\n附件内容:\n")
-        
-        attachments.forEach { attachment ->
+    private fun processAttachments(context: Context, attachments: List<Attachment>): List<AttachmentRequest> {
+        if (attachments.isEmpty()) return emptyList()
+
+        val attachmentRequests = mutableListOf<AttachmentRequest>()
+
+        attachments.forEachIndexed { index, attachment ->
             try {
-                val content = readAttachmentContent(context, attachment)
-                processedContent.append("\n=== ${attachment.name} (${attachment.type}) ===\n")
-                processedContent.append(content)
+                val mimeType = FileUtils.getMimeType(attachment.name)
+                val attachmentType = FileUtils.getAttachmentType(mimeType)
+
+                when (attachmentType) {
+                    "image", "audio" -> {
+                        val base64Data = FileUtils.fileToBase64(context, attachment.path)
+                        if (base64Data != null) {
+                            attachmentRequests.add(
+                                AttachmentRequest(
+                                    type = attachmentType,
+                                    mimeType = mimeType,
+                                    base64Data = base64Data,
+                                    detail = if (attachmentType == "image") "auto" else null
+                                )
+                            )
+                        }
+                    }
+                    "text" -> {
+                        val content = FileUtils.readUriOrFile(context, attachment.path)
+                        attachmentRequests.add(
+                            AttachmentRequest(
+                                type = "text",
+                                mimeType = mimeType,
+                                base64Data = "",
+                                content = content
+                            )
+                        )
+                    }
+                    else -> {
+                        val content = FileUtils.readUriOrFile(context, attachment.path)
+                        attachmentRequests.add(
+                            AttachmentRequest(
+                                type = "text",
+                                mimeType = mimeType,
+                                base64Data = "",
+                                content = "[文件: ${attachment.name}]\n$content"
+                            )
+                        )
+                    }
+                }
             } catch (e: Exception) {
-                processedContent.append("\n=== ${attachment.name} (${attachment.type}) ===\n")
-                processedContent.append("无法读取附件内容: ${e.message}")
+                // Skip failed attachments
             }
         }
-        
-        return processedContent.toString()
+
+        return attachmentRequests
     }
 
     private fun readAttachmentContent(context: Context, attachment: Attachment): String {
@@ -603,19 +639,20 @@ class ChatViewModel : ViewModel() {
     private fun buildRequestMessagesWithTools(
         config: ModelConfig,
         history: List<Message>,
-        processedContent: String?,
-        toolDescription: String
+        currentContent: String?,
+        toolDescription: String,
+        attachmentRequests: List<AttachmentRequest> = emptyList()
     ): List<MessageRequest> {
         val result = mutableListOf<MessageRequest>()
-        
+
         val systemPrompt = if (config.systemPrompt.isNotBlank()) {
             "${config.systemPrompt}\n\n你可以使用以下工具来操作文件：\n$toolDescription"
         } else {
             "你可以使用以下工具来操作文件：\n$toolDescription"
         }
         result += MessageRequest(role = "system", content = systemPrompt)
-        
-        if (processedContent != null && history.isNotEmpty()) {
+
+        if (currentContent != null && history.isNotEmpty()) {
             result += history.subList(0, history.size - 1).map { message ->
                 var content = message.content
                 if (message.attachments.isNotEmpty()) {
@@ -625,7 +662,11 @@ class ChatViewModel : ViewModel() {
                 MessageRequest(role = message.role, content = content)
             }
             val lastMessage = history.last()
-            result += MessageRequest(role = lastMessage.role, content = processedContent)
+            result += MessageRequest(
+                role = lastMessage.role,
+                content = currentContent,
+                attachments = attachmentRequests
+            )
         } else {
             result += history.map { message ->
                 var content = message.content
@@ -636,7 +677,7 @@ class ChatViewModel : ViewModel() {
                 MessageRequest(role = message.role, content = content)
             }
         }
-        
+
         return result
     }
 

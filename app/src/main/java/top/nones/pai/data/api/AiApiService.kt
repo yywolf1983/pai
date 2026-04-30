@@ -41,8 +41,15 @@ class AiApiService {
                 json.put("frequency_penalty", 0.5)
                 json.put("presence_penalty", 0.0)
 
+                Log.d("AiApiService", "Sending request with ${messages.size} messages")
+                messages.forEachIndexed { index, msg ->
+                    Log.d("AiApiService", "Message $index: role=${msg.role}, hasAttachments=${msg.attachments.isNotEmpty()}")
+                }
+                val jsonString = json.toString()
+                Log.d("AiApiService", "Request body length: ${jsonString.length}")
+
                 val mediaType = "application/json".toMediaType()
-                val body = json.toString().toRequestBody(mediaType)
+                val body = jsonString.toRequestBody(mediaType)
                 val normalizedEndpoint = normalizeEndpoint(modelConfig.endpoint)
 
                 val builder = Request.Builder()
@@ -109,8 +116,15 @@ class AiApiService {
                 json.put("presence_penalty", 0.0)
                 json.put("stream", true)
 
+                Log.d("AiApiService", "Sending stream request with ${messages.size} messages")
+                messages.forEachIndexed { index, msg ->
+                    Log.d("AiApiService", "Stream Message $index: role=${msg.role}, hasAttachments=${msg.attachments.isNotEmpty()}")
+                }
+                val jsonString = json.toString()
+                Log.d("AiApiService", "Stream request body length: ${jsonString.length}")
+
                 val mediaType = "application/json".toMediaType()
-                val body = json.toString().toRequestBody(mediaType)
+                val body = jsonString.toRequestBody(mediaType)
                 val normalizedEndpoint = normalizeEndpoint(modelConfig.endpoint)
 
                 val builder = Request.Builder()
@@ -290,14 +304,71 @@ sealed class ApiResult<out T> {
     data class Error(val message: String) : ApiResult<Nothing>()
 }
 
+sealed class ContentBlock {
+    data class Text(val text: String) : ContentBlock()
+    data class ImageUrl(val url: String, val detail: String = "auto") : ContentBlock()
+    data class Audio(val url: String) : ContentBlock()
+}
+
 data class MessageRequest(
     val role: String,
-    val content: String
+    val content: String,
+    val attachments: List<AttachmentRequest> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val json = JSONObject()
         json.put("role", role)
-        json.put("content", content)
+        
+        if (attachments.isEmpty()) {
+            json.put("content", content)
+        } else {
+            val contentArray = JSONArray()
+            
+            if (content.isNotEmpty()) {
+                val textObj = JSONObject()
+                textObj.put("type", "text")
+                textObj.put("text", content)
+                contentArray.put(textObj)
+            }
+            
+            attachments.forEach { attachment ->
+                when (attachment.type) {
+                    "image" -> {
+                        val imageObj = JSONObject()
+                        imageObj.put("type", "image_url")
+                        val imageUrlObj = JSONObject()
+                        imageUrlObj.put("url", "data:${attachment.mimeType};base64,${attachment.base64Data}")
+                        imageUrlObj.put("detail", attachment.detail ?: "auto")
+                        imageObj.put("image_url", imageUrlObj)
+                        contentArray.put(imageObj)
+                    }
+                    "audio" -> {
+                        val audioObj = JSONObject()
+                        audioObj.put("type", "audio")
+                        audioObj.put("audio", JSONObject().apply {
+                            put("url", "data:${attachment.mimeType};base64,${attachment.base64Data}")
+                        })
+                        contentArray.put(audioObj)
+                    }
+                    "text" -> {
+                        val textObj = JSONObject()
+                        textObj.put("type", "text")
+                        textObj.put("text", attachment.content ?: "")
+                        contentArray.put(textObj)
+                    }
+                }
+            }
+            
+            json.put("content", contentArray)
+        }
         return json
     }
 }
+
+data class AttachmentRequest(
+    val type: String,
+    val mimeType: String,
+    val base64Data: String,
+    val detail: String? = null,
+    val content: String? = null
+)

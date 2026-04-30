@@ -1,7 +1,9 @@
 package top.nones.pai.utils
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
+import android.util.Base64
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -317,5 +319,80 @@ object FileUtils {
             "lastModified" to file.lastModified(),
             "isDirectory" to file.isDirectory
         )
+    }
+
+    fun fileToBase64(context: Context, filePath: String): String? {
+        return if (filePath.startsWith("content://")) {
+            uriToBase64(context, Uri.parse(filePath))
+        } else {
+            val file = getFile(context, filePath)
+            if (!file.exists()) {
+                return null
+            }
+            try {
+                Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun uriToBase64(context: Context, uri: Uri): String? {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val bytes = inputStream?.readBytes()
+            inputStream?.close()
+            bytes?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun readUriContent(context: Context, uri: Uri): String {
+        val inputStream = context.contentResolver.openInputStream(uri)
+        val content = inputStream?.reader()?.readText() ?: ""
+        inputStream?.close()
+        return content
+    }
+
+    fun readUriOrFile(context: Context, pathOrUri: String): String {
+        return if (pathOrUri.startsWith("content://")) {
+            readUriContent(context, Uri.parse(pathOrUri))
+        } else {
+            readFile(context, pathOrUri)
+        }
+    }
+
+    fun getMimeType(fileName: String): String {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        return when (extension) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "m4a" -> "audio/mp4"
+            "ogg" -> "audio/ogg"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "txt" -> "text/plain"
+            "md" -> "text/markdown"
+            "json" -> "application/json"
+            "xml" -> "application/xml"
+            "html" -> "text/html"
+            "css" -> "text/css"
+            "js" -> "application/javascript"
+            else -> "application/octet-stream"
+        }
+    }
+
+    fun getAttachmentType(mimeType: String): String {
+        return when {
+            mimeType.startsWith("image/") -> "image"
+            mimeType.startsWith("audio/") -> "audio"
+            mimeType.startsWith("text/") -> "text"
+            else -> "file"
+        }
     }
 }
