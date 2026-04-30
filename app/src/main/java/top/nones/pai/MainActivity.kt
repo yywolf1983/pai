@@ -170,6 +170,12 @@ fun AppNavigation(
     val isTestingModel by viewModel.isTestingModel.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
+    val isStreaming by viewModel.isStreaming.collectAsState()
+    val streamingContent by viewModel.streamingContent.collectAsState()
+    val thinkingContent by viewModel.thinkingContent.collectAsState()
+    val outputSpeed by viewModel.outputSpeed.collectAsState()
+    val contextSize by viewModel.contextSize.collectAsState()
+    val outputSize by viewModel.outputSize.collectAsState()
 
     // 显示错误消息
     Box(modifier = Modifier.fillMaxSize()) {
@@ -200,6 +206,12 @@ fun AppNavigation(
                 ChatScreen(
                     messages = messages,
                     isSending = isLoading,
+                    isStreaming = isStreaming,
+                    streamingContent = streamingContent,
+                    thinkingContent = thinkingContent,
+                    outputSpeed = outputSpeed,
+                    contextSize = contextSize,
+                    outputSize = outputSize,
                     chatTitle = chatTitle,
                     editingMessage = editingMessage,
                     selectedAttachments = selectedAttachments,
@@ -295,6 +307,7 @@ fun AppNavigation(
             is Screen.ModelConfigEdit -> {
                 val modelConfig = (currentScreen as Screen.ModelConfigEdit).modelConfig
                 ModelConfigEditScreen(
+                    context = context,
                     modelConfig = modelConfig,
                     isTesting = isTestingModel,
                     isFetchingModels = isFetchingModels,

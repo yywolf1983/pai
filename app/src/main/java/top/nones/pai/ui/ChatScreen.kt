@@ -3,6 +3,7 @@ package top.nones.pai.ui
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -62,12 +63,29 @@ import androidx.compose.foundation.clickable
 import top.nones.pai.data.model.Message
 import top.nones.pai.data.model.Attachment
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     messages: List<Message>,
     isSending: Boolean,
+    isStreaming: Boolean,
+    streamingContent: String,
+    thinkingContent: String?,
+    outputSpeed: Double,
+    contextSize: Int,
+    outputSize: Int,
     chatTitle: String,
     editingMessage: Message?,
     selectedAttachments: List<Attachment>,
@@ -126,10 +144,14 @@ fun ChatScreen(
                         Text(
                             text = chatTitle,
                             style = MaterialTheme.typography.headlineSmall,
-                            modifier = Modifier.clickable { 
-                                isEditing = true
-                                editedTitle = chatTitle
-                            }
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .clickable { 
+                                    isEditing = true
+                                    editedTitle = chatTitle
+                                }
+                                .padding(end = 8.dp)
                         )
                     }
                 },
@@ -173,10 +195,14 @@ fun ChatScreen(
                 // 消息列表
                 val listState = rememberLazyListState()
                 
-                // 自动向下滚动
-                LaunchedEffect(messages.size) {
-                    if (messages.isNotEmpty()) {
-                        listState.animateScrollToItem(messages.size - 1)
+                // 确保初始加载时滚动到最后
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(100)
+                    if (listState.layoutInfo.totalItemsCount > 0) {
+                        listState.scrollToItem(
+                            index = listState.layoutInfo.totalItemsCount - 1,
+                            scrollOffset = Int.MAX_VALUE
+                        )
                     }
                 }
                 
@@ -195,26 +221,118 @@ fun ChatScreen(
                     // AI 状态显示
                     if (isSending) {
                         item {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(10.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
+                                horizontalAlignment = Alignment.Start
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    strokeWidth = 3.dp
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = aiStatus ?: "处理中...",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                // 思考过程显示
+                                if (thinkingContent != null) {
+                                    Spacer(modifier = Modifier.size(8.dp))
+                                    var isThinkingExpanded by remember { mutableStateOf(true) }
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+                                        )
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(10.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { isThinkingExpanded = !isThinkingExpanded },
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = if (isThinkingExpanded) "▼ 思考中" else "▶ 思考中",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = "${thinkingContent.length} 字符",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                            if (isThinkingExpanded) {
+                                                Spacer(modifier = Modifier.size(4.dp))
+                                                Text(
+                                                    text = thinkingContent,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // 流式输出显示
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "AI 回复:",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.size(4.dp))
+                                        // 使用优化后的MarkdownText渲染，添加内边距防止表格渲染时抖动
+                                        MarkdownText(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp),
+                                            markdown = streamingContent ?: "",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            syntaxHighlightColor = MaterialTheme.colorScheme.surface,
+                                            syntaxHighlightTextColor = MaterialTheme.colorScheme.onSurface,
+                                            wrapMultilineTextWidth = true
+                                        )
+                                    }
+                                }
+                                
+
+                                
+
                             }
                         }
+                    }
+                }
+
+                // 模型数据信息
+                if (isSending) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "上下文: ${contextSize} 字符",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "输出: ${outputSize} 字符",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "速度: ${String.format("%.1f", outputSpeed)} t/s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -291,14 +409,14 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(16.dp),
                     tonalElevation = 2.dp,
-                    shadowElevation = 4.dp
+                    shadowElevation = 2.dp
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(6.dp),
+                            .padding(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         var messageText by remember {
@@ -316,11 +434,13 @@ fun ChatScreen(
                             onClick = onSelectAttachments,
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Add,
-                                contentDescription = "选择附件"
+                                contentDescription = "选择附件",
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         OutlinedTextField(
@@ -332,14 +452,14 @@ fun ChatScreen(
                             placeholder = {
                                 Text(
                                     text = "输入消息...",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                            singleLine = true,
-                            maxLines = 4,
-                            shape = RoundedCornerShape(20.dp),
+                            minLines = 1,
+                            maxLines = 5,
+                            shape = RoundedCornerShape(16.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
@@ -348,7 +468,7 @@ fun ChatScreen(
                                 unfocusedContainerColor = MaterialTheme.colorScheme.surface
                             )
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         val buttonColor by animateColorAsState(
                             targetValue = if (isSending || (messageText.trim().isEmpty() && selectedAttachments.isEmpty())) {
@@ -384,18 +504,21 @@ fun ChatScreen(
                                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             modifier = Modifier
-                                .padding(4.dp)
+                                .size(40.dp)
+                                .padding(2.dp)
                                 .animateContentSize()
                         ) {
                             if (isSending) {
                                 Icon(
                                     imageVector = Icons.Filled.Close,
-                                    contentDescription = "取消"
+                                    contentDescription = "取消",
+                                    modifier = Modifier.size(20.dp)
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "发送"
+                                    contentDescription = "发送",
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -521,7 +644,7 @@ fun MessageItem(message: Message, onDelete: (Message) -> Unit, onResend: (Messag
                     if (isUser) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
-                                text = message.content,
+                                text = message.content ?: "",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (isFailed) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary,
                                 lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 0.9
@@ -560,15 +683,40 @@ fun MessageItem(message: Message, onDelete: (Message) -> Unit, onResend: (Messag
                     } else {
                         // 对AI回复的消息使用Markdown组件
                         MarkdownText(
-                            modifier = Modifier.fillMaxWidth(),
-                            markdown = message.content,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            markdown = message.content ?: "",
                             style = MaterialTheme.typography.bodyMedium,
                             syntaxHighlightColor = MaterialTheme.colorScheme.surface,
-                            syntaxHighlightTextColor = MaterialTheme.colorScheme.onSurface
+                            syntaxHighlightTextColor = MaterialTheme.colorScheme.onSurface,
+                            wrapMultilineTextWidth = true
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun AnimatedEllipsis() {
+    val animationValue by animateIntAsState(
+        targetValue = 3,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "animationValue"
+    )
+    
+    Row {
+        repeat(3) {index ->
+            Text(
+                text = if (index < animationValue) "." else " ",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

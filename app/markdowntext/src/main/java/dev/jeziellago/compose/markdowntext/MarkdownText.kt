@@ -14,7 +14,9 @@ import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,7 +27,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.widget.TextViewCompat
 import coil3.ImageLoader
-import io.noties.markwon.Markwon
+import io.noties.markwon
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun MarkdownText(
@@ -87,9 +94,32 @@ fun MarkdownText(
         modifier
     }
     
+    // 防抖机制，减少流式输出时的渲染频率
+    val scope = remember { CoroutineScope(Dispatchers.Main + SupervisorJob()) }
+    val lastRenderedMarkdown = remember { mutableStateOf(markdown) }
+    val isRendering = remember { mutableStateOf(false) }
+    
+    // 当markdown变化时，延迟渲染
+    DisposableEffect(markdown) {
+        if (markdown != lastRenderedMarkdown.value && !isRendering.value) {
+            isRendering.value = true
+            
+            scope.launch {
+                // 延迟100ms渲染，减少闪屏
+                delay(100)
+                lastRenderedMarkdown.value = markdown
+                isRendering.value = false
+            }
+        }
+        
+        onDispose {
+            // 取消所有协程
+        }
+    }
+    
     // Create a stable key based on markdown content hash for proper LazyColumn recycling
-    val contentKey = remember(markdown) {
-        markdown.hashCode()
+    val contentKey = remember(lastRenderedMarkdown.value) {
+        lastRenderedMarkdown.value.hashCode()
     }
     
     key(contentKey) {
@@ -126,34 +156,35 @@ fun MarkdownText(
                 }
             },
             update = { textView ->
-                // Clear previous state before rendering new content
-                // This prevents corruption when views are reused in LazyColumn
-                textView.resetTextState()
-                
-                with(textView) {
-                    applyTextColor(style.color.takeOrElse { defaultColor }.toArgb())
-                    applyFontSize(style)
-                    applyLineHeight(style)
-                    applyTextDecoration(style)
-                    textSelectionColors?.let { applyTextSelectionColors(it) }
+                // 只有当内容真正变化时才重置状态，避免不必要的闪屏
+                if (textView.text.toString() != lastRenderedMarkdown.value) {
+                    // 只更新文本，不重置状态，避免闪屏
+                    with(textView) {
+                        applyTextColor(style.color.takeOrElse { defaultColor }.toArgb())
+                        applyFontSize(style)
+                        applyLineHeight(style)
+                        applyTextDecoration(style)
+                        textSelectionColors?.let { applyTextSelectionColors(it) }
 
-                    with(style) {
-                        applyTextAlign(textAlign)
-                        fontFamily?.let { applyFontFamily(this) }
-                        fontStyle?.let { applyFontStyle(it) }
-                        fontWeight?.let { applyFontWeight(it) }
+                        with(style) {
+                            applyTextAlign(textAlign)
+                            fontFamily?.let { applyFontFamily(this) }
+                            fontStyle?.let { applyFontStyle(it) }
+                            fontWeight?.let { applyFontWeight(it) }
+                        }
                     }
-                }
-                markdownRender.setMarkdown(textView, markdown)
-                if (disableLinkMovementMethod) {
-                    textView.movementMethod = null
-                }
-                if (onTextLayout != null) {
-                    textView.post {
-                        onTextLayout(textView.lineCount)
+                    // 直接设置markdown，避免resetTextState
+                    markdownRender.setMarkdown(textView, lastRenderedMarkdown.value)
+                    if (disableLinkMovementMethod) {
+                        textView.movementMethod = null
                     }
+                    if (onTextLayout != null) {
+                        textView.post {
+                            onTextLayout(textView.lineCount)
+                        }
+                    }
+                    textView.maxLines = maxLines
                 }
-                textView.maxLines = maxLines
             }
         )
     }

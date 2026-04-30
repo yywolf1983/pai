@@ -51,6 +51,27 @@ class ChatViewModel : ViewModel() {
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    private val _streamingContent = MutableStateFlow<String>("")
+    val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
+
+    private val _thinkingContent = MutableStateFlow<String?>(null)
+    val thinkingContent: StateFlow<String?> = _thinkingContent.asStateFlow()
+
+    private val _outputSpeed = MutableStateFlow<Double>(0.0)
+    val outputSpeed: StateFlow<Double> = _outputSpeed.asStateFlow()
+
+    private val _contextSize = MutableStateFlow<Int>(0)
+    val contextSize: StateFlow<Int> = _contextSize.asStateFlow()
+
+    private val _outputSize = MutableStateFlow<Int>(0)
+    val outputSize: StateFlow<Int> = _outputSize.asStateFlow()
+
+    private val _isStreaming = MutableStateFlow(false)
+    val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
+
+    private var startTime: Long = 0
+    private var totalChars: Int = 0
     private val _modelTestStatus = MutableStateFlow<String?>(null)
     val modelTestStatus: StateFlow<String?> = _modelTestStatus.asStateFlow()
     private val _isTestingModel = MutableStateFlow(false)
@@ -75,7 +96,7 @@ class ChatViewModel : ViewModel() {
                         endpoint = "http://10.0.2.2:11434",
                         apiKey = "",
                         modelName = "qwen2.5:3b",
-                        systemPrompt = "你是一个简洁可靠的手机 AI 助手。",
+                        systemPrompt = "你是一个简洁可靠的手机 AI 助手。请严格基于事实回答，不要编造信息。如果不确定，请明确说明不知道，不要猜测。",
                         isLocal = true,
                         isDefault = true
                     )
@@ -139,56 +160,136 @@ class ChatViewModel : ViewModel() {
 
                     if (modelConfig != null) {
                         _isLoading.value = true
+                        _isStreaming.value = true
                         _aiStatus.value = "正在发送请求..."
+                        _streamingContent.value = ""
+                        _thinkingContent.value = null
+                        _outputSpeed.value = 0.0
+                        _outputSize.value = 0
+                        
                         val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                        val requestMessages = buildRequestMessages(modelConfig, history, processedContent)
+                        
+                        // 计算上下文大小
+                        val contextSize = requestMessages.sumOf { it.content.length }
+                        _contextSize.value = contextSize
+                        
+                        startTime = System.currentTimeMillis()
+                        totalChars = 0
+                        
                         try {
                             _aiStatus.value = "正在处理响应..."
-                            when (val aiResponse = aiApiService.sendMessage(modelConfig, buildRequestMessages(modelConfig, history, processedContent))) {
-                                is ApiResult.Success -> {
+                            // 初始化思考内容为空
+                            _thinkingContent.value = ""
+                            
+                            // 缓冲变量，用于批量更新
+                            var contentBuffer = _streamingContent.value
+                            var thinkingBuffer = _thinkingContent.value
+                            var lastUpdateTime = System.currentTimeMillis()
+                            val UPDATE_INTERVAL = 100L // 100ms更新一次
+                            
+                            aiApiService.sendMessageStream(
+                                modelConfig = modelConfig,
+                                messages = requestMessages,
+                                onChunk = { contentChunk, thinkingChunk ->
+                                    val currentTime = System.currentTimeMillis()
+                                    var needsUpdate = false
+                                    
+                                    if (thinkingChunk != null) {
+                                        // 累积思考内容到缓冲区
+                                        thinkingBuffer += thinkingChunk
+                                        needsUpdate = true
+                                    }
+                                    if (contentChunk.isNotEmpty()) {
+                                        // 累积内容到缓冲区
+                                        contentBuffer += contentChunk
+                                        totalChars += contentChunk.length
+                                        val elapsedTime = (System.currentTimeMillis() - startTime) / 1000.0
+                                        if (elapsedTime > 0) {
+                                            _outputSpeed.value = totalChars / elapsedTime
+                                        }
+                                        _outputSize.value = totalChars
+                                        needsUpdate = true
+                                    }
+                                    
+                                    // 每100ms或有大量内容时才更新UI
+                                    if (needsUpdate && (currentTime - lastUpdateTime >= UPDATE_INTERVAL)) {
+                                        _thinkingContent.value = thinkingBuffer
+                                        _streamingContent.value = contentBuffer
+                                        lastUpdateTime = currentTime
+                                    }
+                                },
+                                onComplete = {
                                     _aiStatus.value = "处理完成"
-                                    val aiMessage = Message(
-                                        id = nextMessageId(),
-                                        chatId = chatId,
-                                        content = aiResponse.data,
-                                        role = "assistant"
-                                    )
-
-                                    localMessages += aiMessage
-                                    saveToSharedPreferences(context)
-                                    _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
-
-                                    val index = localChats.indexOfFirst { it.id == chatId }
-                                    if (index >= 0) {
-                                        localChats[index] = localChats[index].copy(
-                                            updatedAtMillis = System.currentTimeMillis(),
-                                            title = if (localChats[index].title.isBlank() || localChats[index].title == "新聊天") trimmed.take(20) else localChats[index].title
+                                    // 确保最后一次缓冲内容也更新
+                                    _thinkingContent.value = thinkingBuffer
+                                    _streamingContent.value = contentBuffer
+                                    val finalContent = _streamingContent.value
+                                    if (finalContent.isNotEmpty()) {
+                                        val aiMessage = Message(
+                                            id = nextMessageId(),
+                                            chatId = chatId,
+                                            content = finalContent,
+                                            role = "assistant"
                                         )
+
+                                        localMessages += aiMessage
                                         saveToSharedPreferences(context)
-                                        loadChatSessions()
+                                        _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+
+                                        val index = localChats.indexOfFirst { it.id == chatId }
+                                        if (index >= 0) {
+                                            localChats[index] = localChats[index].copy(
+                                                updatedAtMillis = System.currentTimeMillis(),
+                                                title = if (localChats[index].title.isBlank() || localChats[index].title == "新聊天") trimmed.take(20) else localChats[index].title
+                                            )
+                                            saveToSharedPreferences(context)
+                                            loadChatSessions()
+                                        }
+                                    }
+                                    // 延迟清除状态，让用户有时间看到
+                                    viewModelScope.launch {
+                                        kotlinx.coroutines.delay(2000)
+                                        _aiStatus.value = null
+                                        _thinkingContent.value = null
+                                        _isStreaming.value = false
+                                    }
+                                },
+                                onError = { errorMessage ->
+                                    _aiStatus.value = "处理失败"
+                                    // 确保最后一次缓冲内容也更新
+                                    _thinkingContent.value = thinkingBuffer
+                                    _streamingContent.value = contentBuffer
+                                    _errorMessage.value = "AI 聊天失败: $errorMessage"
+                                    // 延迟清除状态，让用户有时间看到
+                                    viewModelScope.launch {
+                                        kotlinx.coroutines.delay(2000)
+                                        _aiStatus.value = null
+                                        _thinkingContent.value = null
+                                        _isStreaming.value = false
                                     }
                                 }
-                                is ApiResult.Error -> {
-                                    _aiStatus.value = "处理失败"
-                                    _errorMessage.value = "AI 聊天失败: ${aiResponse.message}"
-                                }
-                            }
+                            )
                         } catch (e: Exception) {
                             _aiStatus.value = "处理异常"
                             _errorMessage.value = "发送消息失败: ${e.message}"
-                        } finally {
+                            _isStreaming.value = false
                             // 延迟清除状态，让用户有时间看到
                             viewModelScope.launch {
                                 kotlinx.coroutines.delay(2000)
                                 _aiStatus.value = null
+                                _thinkingContent.value = null
                             }
+                        } finally {
+                            _isLoading.value = false
                         }
                     } else {
                         _errorMessage.value = "未找到模型配置"
                     }
                 } catch (e: Exception) {
                     _errorMessage.value = "发送消息失败: ${e.message}"
-                } finally {
                     _isLoading.value = false
+                    _isStreaming.value = false
                 }
             }
         }
@@ -406,18 +507,34 @@ class ChatViewModel : ViewModel() {
 
     fun createModelConfig(context: Context, modelConfig: ModelConfig) {
         try {
+            println("=== 开始保存模型配置 ===")
+            println("模型配置: $modelConfig")
             if (modelConfig.isDefault) {
+                println("设置为默认模型，将其他模型的默认标志设为 false")
                 localConfigs.replaceAll { it.copy(isDefault = false) }
             }
             if (modelConfig.id == 0L) {
-                localConfigs += modelConfig.copy(id = nextConfigId())
+                val newId = nextConfigId()
+                println("新模型，生成ID: $newId")
+                localConfigs += modelConfig.copy(id = newId)
             } else {
                 val index = localConfigs.indexOfFirst { it.id == modelConfig.id }
-                if (index >= 0) localConfigs[index] = modelConfig
+                if (index >= 0) {
+                    println("更新现有模型，索引: $index")
+                    localConfigs[index] = modelConfig
+                } else {
+                    println("未找到现有模型，添加为新模型")
+                    localConfigs += modelConfig
+                }
             }
+            println("保存前本地配置数量: ${localConfigs.size}")
             saveToSharedPreferences(context)
+            println("保存后")
             loadModelConfigs()
+            println("加载后配置数量: ${_modelConfigs.value.size}")
+            println("=== 保存完成 ===")
         } catch (e: Exception) {
+            println("保存模型配置异常: ${e.message}")
             _errorMessage.value = "创建模型配置失败: ${e.message}"
         }
     }
@@ -559,65 +676,85 @@ class ChatViewModel : ViewModel() {
     private fun nextConfigId(): Long = ++configIdSeed
     
     private fun loadFromSharedPreferences(context: Context) {
-        val prefs = context.getSharedPreferences("pai_app", Context.MODE_PRIVATE)
-        
-        // 加载模型配置
-        val modelConfigsJson = prefs.getString(MODEL_CONFIGS_KEY, "")
-        if (!modelConfigsJson.isNullOrEmpty()) {
-            val type = object : TypeToken<List<ModelConfig>>() {}.type
-            val loadedConfigs = gson.fromJson<List<ModelConfig>>(modelConfigsJson, type)
-            localConfigs.clear()
-            localConfigs.addAll(loadedConfigs)
-            if (localConfigs.isNotEmpty()) {
-                configIdSeed = localConfigs.maxByOrNull { it.id }?.id ?: 0
-                // 确保有一个默认模型
-                if (localConfigs.none { it.isDefault }) {
-                    localConfigs[0] = localConfigs[0].copy(isDefault = true)
+        try {
+            val prefs = context.getSharedPreferences("pai_app", Context.MODE_PRIVATE)
+            
+            // 加载模型配置
+            val modelConfigsJson = prefs.getString(MODEL_CONFIGS_KEY, "")
+            println("加载模型配置JSON: $modelConfigsJson")
+            if (!modelConfigsJson.isNullOrEmpty()) {
+                val type = object : TypeToken<List<ModelConfig>>() {}.type
+                val loadedConfigs = gson.fromJson<List<ModelConfig>>(modelConfigsJson, type)
+                localConfigs.clear()
+                localConfigs.addAll(loadedConfigs)
+                println("加载到 ${localConfigs.size} 个模型配置")
+                if (localConfigs.isNotEmpty()) {
+                    configIdSeed = localConfigs.maxByOrNull { it.id }?.id ?: 0
+                    println("最大ID: $configIdSeed")
+                    // 确保有一个默认模型
+                    if (localConfigs.none { it.isDefault }) {
+                        localConfigs[0] = localConfigs[0].copy(isDefault = true)
+                        println("设置第一个模型为默认")
+                    }
+                }
+            } else {
+                println("模型配置JSON为空")
+            }
+            
+            // 加载聊天会话
+            val chatSessionsJson = prefs.getString(CHAT_SESSIONS_KEY, "")
+            if (!chatSessionsJson.isNullOrEmpty()) {
+                val type = object : TypeToken<List<ChatSession>>() {}.type
+                val loadedSessions = gson.fromJson<List<ChatSession>>(chatSessionsJson, type)
+                localChats.clear()
+                localChats.addAll(loadedSessions)
+                if (localChats.isNotEmpty()) {
+                    chatIdSeed = localChats.maxByOrNull { it.id }?.id ?: 0
                 }
             }
-        }
-        
-        // 加载聊天会话
-        val chatSessionsJson = prefs.getString(CHAT_SESSIONS_KEY, "")
-        if (!chatSessionsJson.isNullOrEmpty()) {
-            val type = object : TypeToken<List<ChatSession>>() {}.type
-            val loadedSessions = gson.fromJson<List<ChatSession>>(chatSessionsJson, type)
-            localChats.clear()
-            localChats.addAll(loadedSessions)
-            if (localChats.isNotEmpty()) {
-                chatIdSeed = localChats.maxByOrNull { it.id }?.id ?: 0
+            
+            // 加载消息
+            val messagesJson = prefs.getString(MESSAGES_KEY, "")
+            if (!messagesJson.isNullOrEmpty()) {
+                val type = object : TypeToken<List<Message>>() {}.type
+                val loadedMessages = gson.fromJson<List<Message>>(messagesJson, type)
+                localMessages.clear()
+                localMessages.addAll(loadedMessages)
+                if (localMessages.isNotEmpty()) {
+                    messageIdSeed = localMessages.maxByOrNull { it.id }?.id ?: 0
+                }
             }
-        }
-        
-        // 加载消息
-        val messagesJson = prefs.getString(MESSAGES_KEY, "")
-        if (!messagesJson.isNullOrEmpty()) {
-            val type = object : TypeToken<List<Message>>() {}.type
-            val loadedMessages = gson.fromJson<List<Message>>(messagesJson, type)
-            localMessages.clear()
-            localMessages.addAll(loadedMessages)
-            if (localMessages.isNotEmpty()) {
-                messageIdSeed = localMessages.maxByOrNull { it.id }?.id ?: 0
-            }
+        } catch (e: Exception) {
+            println("加载SharedPreferences异常: ${e.message}")
+            _errorMessage.value = "加载数据失败: ${e.message}"
         }
     }
     
     private fun saveToSharedPreferences(context: Context) {
-        val prefs = context.getSharedPreferences("pai_app", Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        
-        // 保存模型配置
-        val modelConfigsJson = gson.toJson(localConfigs)
-        editor.putString(MODEL_CONFIGS_KEY, modelConfigsJson)
-        
-        // 保存聊天会话
-        val chatSessionsJson = gson.toJson(localChats)
-        editor.putString(CHAT_SESSIONS_KEY, chatSessionsJson)
-        
-        // 保存消息
-        val messagesJson = gson.toJson(localMessages)
-        editor.putString(MESSAGES_KEY, messagesJson)
-        
-        editor.apply()
+        try {
+            val prefs = context.getSharedPreferences("pai_app", Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            
+            // 保存模型配置
+            val modelConfigsJson = gson.toJson(localConfigs)
+            println("保存模型配置JSON: $modelConfigsJson")
+            editor.putString(MODEL_CONFIGS_KEY, modelConfigsJson)
+            
+            // 保存聊天会话
+            val chatSessionsJson = gson.toJson(localChats)
+            editor.putString(CHAT_SESSIONS_KEY, chatSessionsJson)
+            
+            // 保存消息
+            val messagesJson = gson.toJson(localMessages)
+            editor.putString(MESSAGES_KEY, messagesJson)
+            
+            val success = editor.commit()
+            println("保存结果: $success")
+            if (!success) {
+                println("保存失败！")
+            }
+        } catch (e: Exception) {
+            println("保存SharedPreferences异常: ${e.message}")
+        }
     }
 }

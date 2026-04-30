@@ -34,11 +34,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import android.content.Context
 import top.nones.pai.data.model.ModelConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelConfigEditScreen(
+    context: Context,
     modelConfig: ModelConfig? = null,
     isTesting: Boolean,
     isFetchingModels: Boolean,
@@ -266,7 +269,11 @@ fun ModelConfigEditScreen(
                         systemPrompt = systemPrompt,
                         isLocal = isLocal,
                         isDefault = isDefault
-                    ) ?: return@Button
+                    )
+                    if (candidate == null) {
+                        Toast.makeText(context, "请填写必填字段：名称、Endpoint和模型名称", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
                     onSave(candidate)
                 },
                 modifier = Modifier.padding(8.dp)

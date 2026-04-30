@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 class AiApiService {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     
@@ -36,7 +36,10 @@ class AiApiService {
                 val json = JSONObject()
                 json.put("model", modelConfig.modelName)
                 json.put("messages", JSONArray(messages.map { it.toJson() }))
-                json.put("temperature", 0.7)
+                json.put("temperature", 0.1)
+                json.put("top_p", 0.1)
+                json.put("frequency_penalty", 0.5)
+                json.put("presence_penalty", 0.0)
 
                 val mediaType = "application/json".toMediaType()
                 val body = json.toString().toRequestBody(mediaType)
@@ -84,6 +87,122 @@ class AiApiService {
             } catch (e: Exception) {
                 Log.e("AiApiService", "Exception: ${e.message}")
                 return@withContext ApiResult.Error("请求异常: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun sendMessageStream(
+        modelConfig: ModelConfig,
+        messages: List<MessageRequest>,
+        onChunk: (String, String?) -> Unit, // (contentChunk, thinkingChunk)
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject()
+                json.put("model", modelConfig.modelName)
+                json.put("messages", JSONArray(messages.map { it.toJson() }))
+                json.put("temperature", 0.1)
+                json.put("top_p", 0.1)
+                json.put("frequency_penalty", 0.5)
+                json.put("presence_penalty", 0.0)
+                json.put("stream", true)
+
+                val mediaType = "application/json".toMediaType()
+                val body = json.toString().toRequestBody(mediaType)
+                val normalizedEndpoint = normalizeEndpoint(modelConfig.endpoint)
+
+                val builder = Request.Builder()
+                    .url(normalizedEndpoint)
+                    .addHeader("Content-Type", "application/json")
+                if (modelConfig.apiKey.isNotBlank()) {
+                    builder.addHeader("Authorization", "Bearer ${modelConfig.apiKey}")
+                }
+                val request = builder.post(body).build()
+                currentCall = client.newCall(request)
+
+                val response = currentCall?.execute()
+                if (response == null) {
+                    onError("请求已取消")
+                    return@withContext
+                }
+                response.use {
+                    if (!it.isSuccessful) {
+                        val errorBody = it.body?.string()
+                        val errorMessage = "HTTP ${it.code}: ${errorBody?.take(280) ?: "empty body"}"
+                        onError(errorMessage)
+                        return@withContext
+                    }
+
+                    val source = it.body?.source() ?: run {
+                        onError("响应为空")
+                        return@withContext
+                    }
+
+                    while (!source.exhausted() && !currentCall?.isCanceled()!!) {
+                        val line = source.readUtf8Line() ?: break
+                        if (line.isBlank() || line == "data: [DONE]") {
+                            if (line == "data: [DONE]") {
+                                onComplete()
+                            }
+                            continue
+                        }
+
+                        if (line.startsWith("data: ")) {
+                            val jsonStr = line.substring(6)
+                            try {
+                                Log.d("AiApiService", "Received chunk: ${jsonStr.take(200)}")
+                                val json = JSONObject(jsonStr)
+                                val choices = json.optJSONArray("choices")
+                                if (choices != null && choices.length() > 0) {
+                                    val choice = choices.getJSONObject(0)
+                                    val delta = choice.optJSONObject("delta")
+                                    val content = delta?.optString("content").orEmpty().takeIf { it != "null" } ?: ""
+                                    
+                                    // 支持多种思考字段名
+                                    var thinking = ""
+                                    if (delta != null) {
+                                        val thinkingKeys = listOf("thinking", "reasoning", "thought", "think", "reasoning_content")
+                                        for (key in thinkingKeys) {
+                                            val value = delta.optString(key).orEmpty().takeIf { it != "null" } ?: ""
+                                            if (value.isNotEmpty()) {
+                                                thinking = value
+                                                Log.d("AiApiService", "Found thinking content with key: $key")
+                                                break
+                                            }
+                                        }
+                                        
+                                        // 检查是否在reasoning字段中
+                                        if (thinking.isEmpty()) {
+                                            val reasoningObj = delta.optJSONObject("reasoning")
+                                            if (reasoningObj != null) {
+                                                thinking = reasoningObj.optString("content").orEmpty().takeIf { it != "null" } ?: ""
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (content.isNotEmpty() || thinking.isNotEmpty()) {
+                                        Log.d("AiApiService", "Content: ${content.take(50)}, Thinking: ${thinking.take(50)}")
+                                        onChunk(content, if (thinking.isNotEmpty()) thinking else null)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("AiApiService", "Error parsing stream chunk: ${e.message}")
+                            }
+                        }
+                    }
+
+                    if (currentCall?.isCanceled() == true) {
+                        onError("请求已取消")
+                    }
+                }
+            } catch (e: IOException) {
+                Log.e("AiApiService", "Stream Network Exception: ${e.message}")
+                onError("网络错误: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("AiApiService", "Stream Exception: ${e.message}")
+                onError("请求异常: ${e.message}")
             }
         }
     }

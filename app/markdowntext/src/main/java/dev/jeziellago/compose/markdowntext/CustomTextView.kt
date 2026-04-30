@@ -50,13 +50,10 @@ class CustomTextView : AppCompatTextView {
 
         val measuredWidth = MeasureSpec.getSize(widthMeasureSpec)
 
-        // If width changed significantly, recalculate layout
-        // This fixes rendering issues in LazyColumn where views are recycled
-        if (lastMeasureWidth != measuredWidth && measuredWidth > 0) {
-            lastMeasureWidth = measuredWidth
-            invalidate()
-            requestLayout()
-            return
+        // 只在内容发生变化时才重置lastMeasureWidth
+        // 避免在滚动时频繁触发重绘
+        if (text.isEmpty()) {
+            lastMeasureWidth = -1
         }
 
         if (!layout.shouldWrap()) return
@@ -159,9 +156,13 @@ class CustomTextView : AppCompatTextView {
     }
 
     fun resetTextState() {
-        text = ""
+        // 只在必要时清空文本，避免频繁闪烁
+        if (text.isNotEmpty()) {
+            text = ""
+        }
         removeAllSpans()
-        lastMeasureWidth = -1
+        // 保留lastMeasureWidth，避免宽度变化导致的重绘
+        // lastMeasureWidth = -1
     }
 
     private fun getClickableSpans(event: MotionEvent): Array<ClickableSpan> {
