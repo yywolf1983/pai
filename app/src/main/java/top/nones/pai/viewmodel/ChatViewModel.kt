@@ -190,17 +190,21 @@ class ChatViewModel : ViewModel() {
                                 
                                 if (thinkingChunk != null) {
                                     thinkingBuffer += thinkingChunk
+                                    totalChars += thinkingChunk.length
                                     needsUpdate = true
                                 }
                                 if (contentChunk.isNotEmpty()) {
                                     contentBuffer += contentChunk
                                     totalChars += contentChunk.length
+                                    _outputSize.value = totalChars
+                                    needsUpdate = true
+                                }
+                                
+                                if (needsUpdate) {
                                     val elapsedTime = (System.currentTimeMillis() - startTime) / 1000.0
                                     if (elapsedTime > 0) {
                                         _outputSpeed.value = totalChars / elapsedTime
                                     }
-                                    _outputSize.value = totalChars
-                                    needsUpdate = true
                                 }
                                 
                                 if (needsUpdate && (currentTime - lastUpdateTime >= UPDATE_INTERVAL)) {

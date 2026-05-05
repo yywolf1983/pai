@@ -310,8 +310,8 @@ fun ChatScreen(
                     }
                 }
 
-                // 模型数据信息
-                if (isSending) {
+                // 模型数据信息（思考中和发送时都显示）
+                if (isStreaming || thinkingContent != null) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
