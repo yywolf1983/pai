@@ -223,6 +223,7 @@ class ChatViewModel : ViewModel() {
                                     val operation = parser.parseCommand(finalContent)
                                     val isToolCall = operation.type != FileOperationParser.OperationType.UNKNOWN
                                     val isPureToolCall = isToolCall && finalContent.trim().startsWith("{") && finalContent.trim().endsWith("}")
+                                    val userHasFileIntent = containsFileOperationIntent(trimmed)
 
                                     if (!isPureToolCall) {
                                         val aiMessage = Message(
@@ -247,7 +248,7 @@ class ChatViewModel : ViewModel() {
                                         loadChatSessions()
                                     }
 
-                                    if (isToolCall) {
+                                    if (isToolCall && userHasFileIntent) {
                                         val toolResult = handleFileOperation(context, chatId, operation)
                                         val toolMessage = Message(
                                             id = nextMessageId(),
@@ -649,12 +650,24 @@ class ChatViewModel : ViewModel() {
     ): List<MessageRequest> {
         val result = mutableListOf<MessageRequest>()
 
+        val hasFileIntent = currentContent?.let { containsFileOperationIntent(it) } ?: false
+        
         val systemPrompt = if (config.systemPrompt.isNotBlank()) {
-            "${config.systemPrompt}\n\n你可以使用以下工具来操作文件：\n$toolDescription"
+            if (hasFileIntent) {
+                "${config.systemPrompt}\n\n你可以使用以下工具来操作文件：\n$toolDescription"
+            } else {
+                config.systemPrompt
+            }
         } else {
-            "你可以使用以下工具来操作文件：\n$toolDescription"
+            if (hasFileIntent) {
+                "你可以使用以下工具来操作文件：\n$toolDescription"
+            } else {
+                ""
+            }
         }
-        result += MessageRequest(role = "system", content = systemPrompt)
+        if (systemPrompt.isNotEmpty()) {
+            result += MessageRequest(role = "system", content = systemPrompt)
+        }
 
         if (currentContent != null && history.isNotEmpty()) {
             result += history.subList(0, history.size - 1).map { message ->
@@ -728,6 +741,25 @@ class ChatViewModel : ViewModel() {
     private fun nextChatId(): Long = ++chatIdSeed
     private fun nextMessageId(): Long = ++messageIdSeed
     private fun nextConfigId(): Long = ++configIdSeed
+    
+    private fun containsFileOperationIntent(content: String): Boolean {
+        val fileIntentPatterns = listOf(
+            "创建文件", "新建文件", "写文件", "写入文件", "保存文件",
+            "读取文件", "读文件", "查看文件", "打开文件",
+            "删除文件", "移除文件",
+            "修改文件", "编辑文件",
+            "重命名文件", "文件重命名",
+            "移动文件", "复制文件",
+            "列出文件", "文件列表", "查看目录", "列出目录",
+            "帮我操作文件", "帮我创建", "帮我删除", "帮我修改",
+            "帮我写", "帮我读", "帮我打开",
+            "操作文件", "管理文件",
+            "bind_directory", "write_file", "read_file", "delete_file", 
+            "create_file", "append_to_file", "rename_file", "move_file", "copy_file"
+        )
+        val lowerContent = content.lowercase()
+        return fileIntentPatterns.any { lowerContent.contains(it.lowercase()) }
+    }
     
     private fun loadFromSharedPreferences(context: Context) {
         try {
