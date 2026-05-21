@@ -288,7 +288,6 @@ fun ChatScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Spacer(modifier = Modifier.size(4.dp))
-                                        // 使用优化后的MarkdownText渲染，添加内边距防止表格渲染时抖动
                                         MarkdownText(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -297,7 +296,8 @@ fun ChatScreen(
                                             style = MaterialTheme.typography.bodyMedium,
                                             syntaxHighlightColor = MaterialTheme.colorScheme.surface,
                                             syntaxHighlightTextColor = MaterialTheme.colorScheme.onSurface,
-                                            wrapMultilineTextWidth = true
+                                            wrapMultilineTextWidth = true,
+                                            isTextSelectable = true
                                         )
                                     }
                                 }
@@ -681,7 +681,6 @@ fun MessageItem(message: Message, onDelete: (Message) -> Unit, onResend: (Messag
                             }
                         }
                     } else {
-                        // 对AI回复的消息使用Markdown组件
                         MarkdownText(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -690,7 +689,8 @@ fun MessageItem(message: Message, onDelete: (Message) -> Unit, onResend: (Messag
                             style = MaterialTheme.typography.bodyMedium,
                             syntaxHighlightColor = MaterialTheme.colorScheme.surface,
                             syntaxHighlightTextColor = MaterialTheme.colorScheme.onSurface,
-                            wrapMultilineTextWidth = true
+                            wrapMultilineTextWidth = true,
+                            isTextSelectable = true
                         )
                     }
                 }

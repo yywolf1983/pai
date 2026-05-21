@@ -77,6 +77,11 @@ class ChatViewModel : ViewModel() {
 
     private var startTime = 0L
     private var totalChars = 0
+    
+    private var isInTable = false
+    private var tableContentBuffer = ""
+    private val TABLE_CELL_PATTERN = Regex("\\|")
+    private val TABLE_SEPARATOR_PATTERN = Regex("^\\s*\\|[-:|\\s]+\\|\\s*$")
 
     private val _modelTestStatus = MutableStateFlow<String?>(null)
     val modelTestStatus: StateFlow<String?> = _modelTestStatus.asStateFlow()
@@ -180,6 +185,7 @@ class ChatViewModel : ViewModel() {
                         var thinkingBuffer = ""
                         var lastUpdateTime = System.currentTimeMillis()
                         val UPDATE_INTERVAL = 100L
+                        resetTableState()
                         
                         aiApiService.sendMessageStream(
                             modelConfig = modelConfig,
@@ -208,12 +214,19 @@ class ChatViewModel : ViewModel() {
                                 }
                                 
                                 if (needsUpdate && (currentTime - lastUpdateTime >= UPDATE_INTERVAL)) {
-                                    _thinkingContent.value = thinkingBuffer
-                                    _streamingContent.value = contentBuffer
-                                    lastUpdateTime = currentTime
+                                    val shouldUpdateUi = processTableContent(contentBuffer)
+                                    if (shouldUpdateUi) {
+                                        _thinkingContent.value = thinkingBuffer
+                                        _streamingContent.value = contentBuffer
+                                        lastUpdateTime = currentTime
+                                    }
                                 }
                             },
                             onComplete = {
+                                if (isInTable) {
+                                    _streamingContent.value = tableContentBuffer
+                                    resetTableState()
+                                }
                                 _aiStatus.value = "处理完成"
                                 _thinkingContent.value = thinkingBuffer
                                 _streamingContent.value = contentBuffer
@@ -759,6 +772,53 @@ class ChatViewModel : ViewModel() {
         )
         val lowerContent = content.lowercase()
         return fileIntentPatterns.any { lowerContent.contains(it.lowercase()) }
+    }
+    
+    private fun isTableSeparatorLine(line: String): Boolean {
+        val trimmed = line.trim()
+        return TABLE_SEPARATOR_PATTERN.matches(trimmed)
+    }
+    
+    private fun resetTableState() {
+        isInTable = false
+        tableContentBuffer = ""
+    }
+    
+    private fun hasTableStructure(lines: List<String>): Boolean {
+        var hasHeader = false
+        var hasSeparator = false
+        
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) continue
+            
+            if (isTableSeparatorLine(trimmed)) {
+                if (hasHeader) {
+                    hasSeparator = true
+                    break
+                }
+            } else if (trimmed.contains("|")) {
+                hasHeader = true
+            }
+        }
+        
+        return hasHeader && hasSeparator
+    }
+    
+    private fun processTableContent(content: String): Boolean {
+        val lines = content.split("\n")
+        
+        if (!isInTable) {
+            if (hasTableStructure(lines)) {
+                isInTable = true
+                tableContentBuffer = content
+                return false
+            }
+            return true
+        } else {
+            tableContentBuffer = content
+            return false
+        }
     }
     
     private fun loadFromSharedPreferences(context: Context) {

@@ -33,6 +33,64 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.regex.Pattern
+
+private val TABLE_CELL_PATTERN = Pattern.compile("\\|")
+private val TABLE_SEPARATOR_PATTERN = Pattern.compile("^\\s*\\|[-:|\\s]+\\|\\s*$")
+
+private fun containsTable(markdown: String): Boolean {
+    val lines = markdown.split("\n")
+    var hasHeader = false
+    var hasSeparator = false
+    
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) continue
+        
+        if (TABLE_SEPARATOR_PATTERN.matcher(trimmed).matches()) {
+            if (hasHeader) {
+                hasSeparator = true
+                break
+            }
+        } else if (TABLE_CELL_PATTERN.matcher(trimmed).find()) {
+            hasHeader = true
+        }
+    }
+    
+    return hasHeader && hasSeparator
+}
+
+private fun isTableComplete(markdown: String): Boolean {
+    if (!containsTable(markdown)) {
+        return true
+    }
+    
+    val lines = markdown.split("\n")
+    var dataRowCount = 0
+    var hasSeparator = false
+    
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) continue
+        
+        if (TABLE_SEPARATOR_PATTERN.matcher(trimmed).matches()) {
+            hasSeparator = true
+        } else if (hasSeparator && TABLE_CELL_PATTERN.matcher(trimmed).find()) {
+            dataRowCount++
+        }
+    }
+    
+    if (dataRowCount >= 2) {
+        return true
+    }
+    
+    if (lines.size >= 6) {
+        val lastLine = lines.lastOrNull() ?: ""
+        return lastLine.trim().isEmpty() || !TABLE_CELL_PATTERN.matcher(lastLine).find()
+    }
+    
+    return false
+}
 
 @Composable
 fun MarkdownText(
@@ -48,18 +106,15 @@ fun MarkdownText(
     style: TextStyle = LocalTextStyle.current,
     @IdRes viewId: Int? = null,
     onClick: (() -> Unit)? = null,
-    // this option will disable all clicks on links, inside the markdown text
-    // it also enable the parent view to receive the click event
     disableLinkMovementMethod: Boolean = false,
     imageLoader: ImageLoader? = null,
     linkifyMask: Int = Linkify.EMAIL_ADDRESSES or Linkify.PHONE_NUMBERS or Linkify.WEB_URLS,
-    enableSoftBreakAddsNewLine: Boolean = false,  // Changed from true to false (Markdown spec: soft breaks = spaces)
+    enableSoftBreakAddsNewLine: Boolean = false,
     syntaxHighlightColor: Color = Color.LightGray,
     syntaxHighlightTextColor: Color = Color.Unspecified,
     headingBreakColor: Color = Color.Transparent,
     enableUnderlineForLink: Boolean = true,
     importForAccessibility: Int = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO,
-    /** Enables text wrapping. See https://github.com/jeziellago/compose-markdown/pull/157 */
     wrapMultilineTextWidth: Boolean = false,
     beforeSetMarkdown: ((TextView, Spanned) -> Unit)? = null,
     afterSetMarkdown: ((TextView) -> Unit)? = null,
@@ -94,30 +149,64 @@ fun MarkdownText(
         modifier
     }
     
-    // 防抖机制，减少流式输出时的渲染频率
     val scope = remember { CoroutineScope(Dispatchers.Main + SupervisorJob()) }
     val lastRenderedMarkdown = remember { mutableStateOf(markdown) }
     val isRendering = remember { mutableStateOf(false) }
+    val pendingMarkdown = remember { mutableStateOf<String?>(null) }
     
-    // 当markdown变化时，延迟渲染
     DisposableEffect(markdown) {
-        if (markdown != lastRenderedMarkdown.value && !isRendering.value) {
+        if (markdown == lastRenderedMarkdown.value) {
+            onDispose { }
+            return@DisposableEffect
+        }
+        
+        val hasTable = containsTable(markdown)
+        val tableComplete = isTableComplete(markdown)
+        
+        val delayMs = if (hasTable && !tableComplete) 500L else 50L
+        
+        pendingMarkdown.value = markdown
+        
+        if (!isRendering.value) {
             isRendering.value = true
             
             scope.launch {
-                // 延迟100ms渲染，减少闪屏
-                delay(100)
-                lastRenderedMarkdown.value = markdown
+                delay(delayMs)
+                
+                val currentPending = pendingMarkdown.value
+                if (currentPending != null) {
+                    val currentHasTable = containsTable(currentPending)
+                    val currentTableComplete = isTableComplete(currentPending)
+                    
+                    if (!currentHasTable || currentTableComplete) {
+                        lastRenderedMarkdown.value = currentPending
+                        pendingMarkdown.value = null
+                    }
+                }
                 isRendering.value = false
+            }
+        } else {
+            scope.launch {
+                delay(delayMs)
+                
+                val currentPending = pendingMarkdown.value
+                if (currentPending != null) {
+                    val currentHasTable = containsTable(currentPending)
+                    val currentTableComplete = isTableComplete(currentPending)
+                    
+                    if (!currentHasTable || currentTableComplete) {
+                        lastRenderedMarkdown.value = currentPending
+                        pendingMarkdown.value = null
+                    }
+                }
             }
         }
         
         onDispose {
-            // 取消所有协程
+            pendingMarkdown.value = null
         }
     }
     
-    // Create a stable key based on markdown content hash for proper LazyColumn recycling
     val contentKey = remember(lastRenderedMarkdown.value) {
         lastRenderedMarkdown.value.hashCode()
     }
