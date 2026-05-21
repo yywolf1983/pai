@@ -198,9 +198,8 @@ fun AppNavigation(
             }
 
             is Screen.Chat -> {
-                // 由于currentScreen是一个具有自定义getter的属性，我们使用when表达式的分支变量来获取chatId
                 val chatId = (currentScreen as Screen.Chat).chatId
-                val currentChat = viewModel.chatSessions.value.find { it.id == chatId }
+                val currentChat = chatSessions.find { it.id == chatId }
                 val chatTitle = currentChat?.title ?: "聊天"
                 
                 ChatScreen(

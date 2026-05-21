@@ -5,12 +5,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
 import top.nones.pai.data.api.AiApiService
 import top.nones.pai.data.api.ApiResult
 import top.nones.pai.data.api.AttachmentRequest
@@ -27,6 +30,8 @@ import top.nones.pai.utils.SecurityManager
 class ChatViewModel : ViewModel() {
     private val aiApiService = AiApiService()
     private var currentChatId: Long? = null
+    
+    private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val localChats = mutableListOf<ChatSession>()
     private val localMessages = mutableListOf<Message>()
@@ -152,7 +157,7 @@ class ChatViewModel : ViewModel() {
 
         _messages.value = _messages.value + userMessage
 
-        viewModelScope.launch {
+        backgroundScope.launch {
             try {
                 localMessages += userMessage.copy(id = nextMessageId())
 
@@ -161,13 +166,15 @@ class ChatViewModel : ViewModel() {
                     ?: localConfigs.firstOrNull { it.isDefault }
 
                 if (modelConfig != null) {
-                    _isLoading.value = true
-                    _isStreaming.value = true
-                    _aiStatus.value = "正在发送请求..."
-                    _streamingContent.value = ""
-                    _thinkingContent.value = null
-                    _outputSpeed.value = 0.0
-                    _outputSize.value = 0
+                    viewModelScope.launch {
+                        _isLoading.value = true
+                        _isStreaming.value = true
+                        _aiStatus.value = "正在发送请求..."
+                        _streamingContent.value = ""
+                        _thinkingContent.value = null
+                        _outputSpeed.value = 0.0
+                        _outputSize.value = 0
+                    }
 
                     val history = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
                     val toolDesc = FileOperationParser().getToolDescription()
@@ -180,7 +187,9 @@ class ChatViewModel : ViewModel() {
                     totalChars = 0
                     
                     try {
-                        _aiStatus.value = "正在处理响应..."
+                        viewModelScope.launch {
+                            _aiStatus.value = "正在处理响应..."
+                        }
                         var contentBuffer = ""
                         var thinkingBuffer = ""
                         var lastUpdateTime = System.currentTimeMillis()
@@ -202,34 +211,40 @@ class ChatViewModel : ViewModel() {
                                 if (contentChunk.isNotEmpty()) {
                                     contentBuffer += contentChunk
                                     totalChars += contentChunk.length
-                                    _outputSize.value = totalChars
                                     needsUpdate = true
                                 }
                                 
                                 if (needsUpdate) {
                                     val elapsedTime = (System.currentTimeMillis() - startTime) / 1000.0
-                                    if (elapsedTime > 0) {
-                                        _outputSpeed.value = totalChars / elapsedTime
+                                    viewModelScope.launch {
+                                        _outputSize.value = totalChars
+                                        if (elapsedTime > 0) {
+                                            _outputSpeed.value = totalChars / elapsedTime
+                                        }
                                     }
                                 }
                                 
                                 if (needsUpdate && (currentTime - lastUpdateTime >= UPDATE_INTERVAL)) {
                                     val shouldUpdateUi = processTableContent(contentBuffer)
                                     if (shouldUpdateUi) {
-                                        _thinkingContent.value = thinkingBuffer
-                                        _streamingContent.value = contentBuffer
+                                        viewModelScope.launch {
+                                            _thinkingContent.value = thinkingBuffer
+                                            _streamingContent.value = contentBuffer
+                                        }
                                         lastUpdateTime = currentTime
                                     }
                                 }
                             },
                             onComplete = {
-                                if (isInTable) {
-                                    _streamingContent.value = tableContentBuffer
-                                    resetTableState()
+                                viewModelScope.launch {
+                                    if (isInTable) {
+                                        _streamingContent.value = tableContentBuffer
+                                        resetTableState()
+                                    }
+                                    _aiStatus.value = "处理完成"
+                                    _thinkingContent.value = thinkingBuffer
+                                    _streamingContent.value = contentBuffer
                                 }
-                                _aiStatus.value = "处理完成"
-                                _thinkingContent.value = thinkingBuffer
-                                _streamingContent.value = contentBuffer
                                 val finalContent = contentBuffer
                                 if (finalContent.isNotEmpty()) {
                                     val parser = FileOperationParser()
@@ -249,7 +264,9 @@ class ChatViewModel : ViewModel() {
                                     }
 
                                     saveToSharedPreferences(context)
-                                    _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                                    viewModelScope.launch {
+                                        _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                                    }
 
                                     val index = localChats.indexOfFirst { it.id == chatId }
                                     if (index >= 0) {
@@ -271,7 +288,9 @@ class ChatViewModel : ViewModel() {
                                         )
                                         localMessages += toolMessage
                                         saveToSharedPreferences(context)
-                                        _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                                        viewModelScope.launch {
+                                            _messages.value = localMessages.filter { it.chatId == chatId }.sortedBy { it.timestampMillis }
+                                        }
                                     }
                                 }
                                 viewModelScope.launch {
@@ -282,11 +301,11 @@ class ChatViewModel : ViewModel() {
                                 }
                             },
                             onError = { errorMessage: String ->
-                                _aiStatus.value = "处理失败"
-                                _thinkingContent.value = thinkingBuffer
-                                _streamingContent.value = contentBuffer
-                                _errorMessage.value = "AI 聊天失败: $errorMessage"
                                 viewModelScope.launch {
+                                    _aiStatus.value = "处理失败"
+                                    _thinkingContent.value = thinkingBuffer
+                                    _streamingContent.value = contentBuffer
+                                    _errorMessage.value = "AI 聊天失败: $errorMessage"
                                     delay(2000)
                                     _aiStatus.value = null
                                     _thinkingContent.value = null
@@ -295,24 +314,31 @@ class ChatViewModel : ViewModel() {
                             }
                         )
                     } catch (e: Exception) {
-                        _aiStatus.value = "处理异常"
-                        _errorMessage.value = "发送消息失败: ${e.message}"
-                        _isStreaming.value = false
                         viewModelScope.launch {
+                            _aiStatus.value = "处理异常"
+                            _errorMessage.value = "发送消息失败: ${e.message}"
+                            _isStreaming.value = false
                             delay(2000)
                             _aiStatus.value = null
                             _thinkingContent.value = null
+                            _isLoading.value = false
                         }
                     } finally {
-                        _isLoading.value = false
+                        viewModelScope.launch {
+                            _isLoading.value = false
+                        }
                     }
                 } else {
-                    _errorMessage.value = "未找到模型配置"
+                    viewModelScope.launch {
+                        _errorMessage.value = "未找到模型配置"
+                    }
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "发送消息失败: ${e.message}"
-                _isLoading.value = false
-                _isStreaming.value = false
+                viewModelScope.launch {
+                    _errorMessage.value = "发送消息失败: ${e.message}"
+                    _isLoading.value = false
+                    _isStreaming.value = false
+                }
             }
         }
     }
@@ -879,5 +905,10 @@ class ChatViewModel : ViewModel() {
             editor.commit()
         } catch (e: Exception) {
         }
+    }
+    
+    override fun onCleared() {
+        backgroundScope.cancel()
+        super.onCleared()
     }
 }
